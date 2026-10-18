@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Flow — QZ30</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#main" aria-label="Flow, skip to controls"><span class="brand-mark" aria-hidden="true">≈</span> FLOW<span class="brand-dot">.</span></a>
+    <div class="sidebar-label">YOUR WORKSPACE</div>
+    <div class="device-nav"><span class="mouse-icon" aria-hidden="true"></span><span>QZ30 Black<small>Mouse controls</small></span><span class="nav-dot" aria-hidden="true"></span></div>
+    <div class="sidebar-bottom"><span class="version">QZ30 / PERSONAL UTILITY</span><p>A little less friction.<br>A little more flow.</p><span id="platform">Windows + macOS</span></div>
+  </aside>
+  <main id="main">
+    <header><div class="breadcrumb">Workspace <span>/</span> QZ30 Black</div><span class="local-badge"><span aria-hidden="true">◈</span> Runs locally</span></header>
+    <section class="heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1>Small moves. Better flow.</h1><p class="subtitle">Your everyday actions, right at your fingertips.</p></div><span class="edition">QZ30 <span>BLACK EDITION</span></span></section>
+    <div id="preview" class="notice" hidden>Interface preview — open desktop app to connect.</div>
+    <div class="workspace">
+      <section class="device-card" aria-labelledby="device-title">
+        <div class="card-top"><h2 id="device-title">Your mouse</h2><span class="tiny-label">QZ30</span></div>
+        <div class="mouse-stage">
+          <div class="mouse-render"><img class="mouse-art" src="assets/qz30.png" alt="QZ30 Black mouse" width="1000" height="1000"><span class="mouse-marker marker-back" aria-hidden="true">2</span><span class="mouse-marker marker-forward" aria-hidden="true">3</span><span class="mouse-marker marker-middle" aria-hidden="true">1</span><span class="mouse-marker marker-thumb" aria-hidden="true">4</span><span class="mouse-marker marker-side-up" aria-hidden="true">↑</span><span class="mouse-marker marker-side-down" aria-hidden="true">↓</span></div>
+          <span class="stage-caption">QZ30 BLACK</span>
+        </div>
+        <div class="receiver"><span id="receiver-dot" class="status-dot"></span><div><strong id="receiver-status">Checking receiver…</strong><p id="receiver-detail">Looking for a compatible USB receiver.</p></div></div>
+        <dl class="device-meta"><div><dt>Connection</dt><dd id="connection">—</dd></div><div><dt>Last input</dt><dd id="last-input">No input yet</dd></div></dl>
+        <p class="footnote">A detected receiver does not confirm that the mouse is powered on. Its USB ID is shared by several models. Bluetooth identification is not verified in this release; use the USB receiver.</p>
+      </section>
+      <section class="mapping-card" aria-labelledby="mapping-title">
+        <div class="card-top"><div><h2 id="mapping-title">Button assignments</h2><p>Less reaching. More doing.</p></div><span id="draft-state" class="draft-state">Saved locally</span></div>
+        <div id="mapping-rows" class="mapping-rows"></div>
+        <p class="wheel-note">Side wheel and button 4 use receiver input on Windows. macOS currently supports OS scroll events; button 4 is unavailable there.</p>
+        <div class="mapping-actions"><button id="reset" class="button secondary" type="button">Reset to defaults</button><button id="save" class="button primary" type="button" disabled>Save assignments <span aria-hidden="true">↗</span></button></div>
+        <div class="enable-area"><div class="enable-header"><div><h3>Put your shortcuts to work</h3><p id="enable-detail">Save an assignment to get started.</p></div><button id="enable" type="button" role="switch" aria-checked="false" aria-label="Enable mouse mappings" class="switch" disabled><span></span></button></div><p class="scope-notice">While enabled, mappings apply to all mice and trackpads on this computer. Close the original mouse utility first.</p><button id="permission" class="text-button" type="button" hidden>Open macOS input permissions ↗</button></div>
+      </section>
+    </div>
+    <footer><span><span class="footer-dot" aria-hidden="true"></span> Local settings. No account needed.</span><span>OS event remapping · No firmware or device writes</span></footer>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+  </main>
+</body>
+</html>
