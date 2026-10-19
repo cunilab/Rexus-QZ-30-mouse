@@ -12,7 +12,7 @@ Open `dist/windows/QZ Flow.exe` after building or extracting the Windows artifac
 2. Quit the original Mouse Assistant from its system tray menu. QZ Flow refuses to activate mappings while that utility is running.
 3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 currently requires Windows and the USB receiver.
 4. Test a simple action, such as Back ? Copy, in a disposable text document. You can edit while mappings run; changes take effect only after Save.
-5. Use the tray menu to **Pause/Resume mappings** or **Quit**. Close hides the window; Minimize keeps the normal Windows behavior. Optional **Launch at login** starts the app hidden.
+5. Use the tray menu to **Pause/Resume mappings** or **Quit**. Close hides the window; Minimize keeps the normal Windows behavior. Open **Settings** in the sidebar for **Launch at login** and window-behavior details. Login launches start hidden.
 
 Saved assignments restore automatically after prerequisite checks. Receiver loss suspends mappings, and reconnection can restore them (checked every two seconds). Explicit Pause persists across restarts and reconnections; Save and apply resumes mappings. Default-only assignments require no receiver.
 

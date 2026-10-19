@@ -4,6 +4,8 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+- Dedicated Settings page for Launch at login and window behavior, separate from mouse assignments.
+
 ## [0.1.1-beta.3]
 
 ### Changed

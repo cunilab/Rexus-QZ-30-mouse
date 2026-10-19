@@ -10,15 +10,17 @@
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="#main" aria-label="Flow, skip to controls"><span class="brand-mark" aria-hidden="true">≈</span> FLOW<span class="brand-dot">.</span></a>
+    <a class="brand" href="#main" aria-label="Flow, skip to content"><span class="brand-mark" aria-hidden="true">≈</span> FLOW<span class="brand-dot">.</span></a>
     <div class="sidebar-label">YOUR WORKSPACE</div>
-    <div class="device-nav"><span class="mouse-icon" aria-hidden="true"></span><span>QZ30 Black<small>Mouse controls</small></span><span class="nav-dot" aria-hidden="true"></span></div>
+    <nav class="page-nav" aria-label="Workspace"><button id="nav-controls" class="device-nav nav-button" type="button" aria-controls="controls-page" aria-current="page"><span class="mouse-icon" aria-hidden="true"></span><span>QZ30 Black<small>Mouse controls</small></span><span class="nav-dot" aria-hidden="true"></span></button>
+    <button id="nav-settings" class="settings-nav nav-button" type="button" aria-controls="settings-page"><span aria-hidden="true">&#9881;</span><span>Settings<small>App behavior</small></span></button></nav>
     <div class="sidebar-bottom"><span class="version">QZ30 / PERSONAL UTILITY</span><p>A little less friction.<br>A little more flow.</p><span id="platform">Windows + macOS</span></div>
   </aside>
   <main id="main">
-    <header><div class="breadcrumb">Workspace <span>/</span> QZ30 Black</div><span class="local-badge"><span aria-hidden="true">◈</span> Runs locally</span></header>
-    <section class="heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1>Small moves. Better flow.</h1><p class="subtitle">Your everyday actions, right at your fingertips.</p></div><span class="edition">QZ30 <span>BLACK EDITION</span></span></section>
+    <header><div class="breadcrumb">Workspace <span>/</span> <span id="page-name">QZ30 Black</span></div><span class="local-badge"><span aria-hidden="true">◈</span> Runs locally</span></header>
     <div id="preview" class="notice" hidden>Interface preview — open desktop app to connect.</div>
+    <div id="controls-page">
+    <section class="heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1 id="controls-title" tabindex="-1">Small moves. Better flow.</h1><p class="subtitle">Your everyday actions, right at your fingertips.</p></div><span class="edition">QZ30 <span>BLACK EDITION</span></span></section>
     <div class="workspace">
       <section class="device-card" aria-labelledby="device-title">
         <div class="card-top"><h2 id="device-title">Your mouse</h2><span class="tiny-label">QZ30</span></div>
@@ -38,12 +40,24 @@
         <div class="mapping-status-area"><h3 id="mapping-status" role="status" aria-live="polite">Checking mappings...</h3><p id="mapping-detail">Reading saved assignments.</p><p class="scope-notice">Active mappings apply to all mice and trackpads on this computer. Close the original mouse utility first. Pause or Resume from the tray or menu bar.</p><button id="permission" class="text-button" type="button" hidden>Open macOS input permissions</button></div>
       </section>
     </div>
+    </div>
+    <div id="settings-page" hidden>
+    <section class="heading"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h1 id="settings-title" tabindex="-1">App settings</h1><p class="subtitle">Choose how QZ Flow fits into your day.</p></div></section>
     <section class="app-settings" aria-labelledby="app-settings-title">
       <h2 id="app-settings-title">App behavior</h2>
       <label class="startup-option"><input id="launch-at-login" type="checkbox" aria-describedby="startup-detail" disabled> Launch at login</label>
       <p id="startup-detail">Checking login settings…</p>
-      <p>Login launch stays in the tray or menu bar. Closing the window keeps QZ Flow running. Use the tray or menu-bar menu to Open, Pause/Resume mappings, or Quit.</p>
+      <p>Login launch stays quietly in the tray or menu bar.</p>
     </section>
+    <section class="app-settings" aria-labelledby="window-settings-title">
+      <h2 id="window-settings-title">Window behavior</h2>
+      <dl class="behavior-list">
+        <div><dt>Close window</dt><dd>Hide to the tray or menu bar and keep mappings running.</dd></div>
+        <div><dt>Minimize window</dt><dd>Use the standard operating-system minimize behavior.</dd></div>
+      </dl>
+      <p>Use the tray or menu-bar menu to Open QZ Flow, Pause/Resume mappings, or Quit.</p>
+    </section>
+    </div>
     <footer><span><span class="footer-dot" aria-hidden="true"></span> Local settings. No account needed.</span><span>OS event remapping · No firmware or device writes</span></footer>
     <div id="message" class="message" role="status" aria-live="polite" hidden></div>
   </main>
