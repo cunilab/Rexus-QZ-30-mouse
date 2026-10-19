@@ -45,19 +45,29 @@ function releaseNotes(version) {
   return `## ${section.trim()}`;
 }
 
-async function github(path) {
+export async function githubRelease(tag) {
   const token = process.env.GH_TOKEN;
   assert(token, 'GH_TOKEN is required');
-  const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/${path}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  const [owner, name, extra] = (process.env.GITHUB_REPOSITORY || '').split('/');
+  assert(owner && name && !extra, 'GITHUB_REPOSITORY is required');
+  const response = await fetch('https://api.github.com/graphql', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: 'query($owner:String!,$name:String!,$tag:String!){repository(owner:$owner,name:$name){release(tagName:$tag){isDraft isPrerelease tagName releaseAssets(first:100){nodes{name size}}}}}',
+      variables: { owner, name, tag },
+    }),
+    signal: AbortSignal.timeout(30000),
   });
-  if (response.status === 404) return null;
   assert(response.ok, `GitHub request failed: ${response.status}`);
-  return response.json();
+  const result = await response.json();
+  assert(!result.errors && result.data?.repository, 'GitHub release query failed');
+  const release = result.data.repository.release;
+  return release && { draft: release.isDraft, prerelease: release.isPrerelease, tag: release.tagName, assets: release.releaseAssets.nodes };
 }
 
 async function requireNoRelease(tag) {
-  assert(!await github(`releases/tags/${encodeURIComponent(tag)}`), `Release ${tag} already exists; refusing to overwrite it`);
+  assert(!await githubRelease(tag), `Release ${tag} already exists; refusing to overwrite it`);
 }
 
 export async function guard() {
@@ -149,16 +159,44 @@ export async function draft() {
   if (tag.includes('-')) args.push('--prerelease');
   args.push(...assets.map(name => `release-assets/${name}`));
   console.log(run('gh', args));
-  const release = await github(`releases/tags/${encodeURIComponent(tag)}`);
+  const release = await githubRelease(tag);
   assert(release?.draft, 'Expected an unpublished draft release');
   assert(release.assets.length === assets.length && assets.every(name => release.assets.some(asset => asset.name === name && asset.size === statSync(`release-assets/${name}`).size)), 'Uploaded release assets differ from validated files; keep this draft unpublished');
   console.log('Draft only: inspect artifacts and checksums before publishing.');
 }
 
+export async function verifyDraft() {
+  const tag = process.env.RELEASE_TAG;
+  const version = tagVersion(tag);
+  const release = await githubRelease(tag);
+  assert(release?.draft && release.tag === tag && release.prerelease === tag.includes('-'), 'Expected matching unpublished draft');
+  mkdirSync('release-assets', { recursive: true });
+  run('gh', ['release', 'download', tag, '--dir', 'release-assets']);
+  const feed = readJson('release-assets/latest.json');
+  assert(feed.version === version && Object.keys(feed.platforms).sort().join() === [...platforms].sort().join(), 'Incomplete updater feed');
+  const files = [];
+  for (const line of readFileSync('release-assets/SHA256SUMS.txt', 'utf8').trim().split(/\r?\n/)) {
+    const [hash, name] = line.split('  ');
+    assert(/^[a-f0-9]{64}$/.test(hash) && /^[A-Za-z0-9._-]+$/.test(name || ''), 'Invalid checksum entry');
+    assert(!files.includes(name) && sha256(`release-assets/${name}`) === hash, 'Downloaded checksum mismatch');
+    files.push(name);
+  }
+  files.push('SHA256SUMS.txt');
+  assert(release.assets.length === files.length && files.every(name => release.assets.some(asset => asset.name === name && asset.size === statSync(`release-assets/${name}`).size)), 'Draft inventory mismatch');
+  for (const platform of platforms) {
+    const update = feed.platforms[platform];
+    const name = decodeURIComponent(new URL(update.url).pathname.split('/').at(-1));
+    assert(update.url === `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(name)}` && name.startsWith(`${platform}-`) && files.includes(name) && files.includes(`${name}.sig`), 'Invalid updater download URL');
+    assert(readFileSync(`release-assets/${name}.sig`, 'utf8').trim() === update.signature, 'Downloaded signature mismatch');
+    verifySignature(readFileSync(`release-assets/${name}`), update.signature, configuredPublicKey());
+  }
+  console.log(`${tag}: downloaded draft inventory, checksums, all three signatures and update URLs verified. Draft remains unpublished.`);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const command = { guard, stage, draft }[process.argv[2]];
-    assert(command, 'Usage: node scripts/release.mjs guard|stage|draft');
+    const command = { guard, stage, draft, 'verify-draft': verifyDraft }[process.argv[2]];
+    assert(command, 'Usage: node scripts/release.mjs guard|stage|draft|verify-draft');
     await command();
   } catch (error) {
     console.error(error.message);

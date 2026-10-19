@@ -6,8 +6,35 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assemble, assetName, platforms, verifySignature } from '../scripts/release.mjs';
+import { assemble, assetName, githubRelease, platforms, verifySignature } from '../scripts/release.mjs';
 const script = fileURLToPath(new URL('../scripts/release.mjs', import.meta.url));
+
+test('GraphQL lookup distinguishes an unpublished draft, missing release and API failure', async () => {
+  const originalFetch = globalThis.fetch;
+  const token = process.env.GH_TOKEN;
+  const repository = process.env.GITHUB_REPOSITORY;
+  process.env.GH_TOKEN = 'test-only';
+  process.env.GITHUB_REPOSITORY = 'owner/repo';
+  let release = { isDraft: true, isPrerelease: true, tagName: 'v0.1.0-beta.1', releaseAssets: { nodes: [{ name: 'file.exe', size: 123 }] } };
+  try {
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, 'https://api.github.com/graphql');
+      assert.deepEqual(JSON.parse(options.body).variables, { owner: 'owner', name: 'repo', tag: 'v0.1.0-beta.1' });
+      return { ok: true, json: async () => ({ data: { repository: { release } } }) };
+    };
+    assert.deepEqual(await githubRelease('v0.1.0-beta.1'), { draft: true, prerelease: true, tag: 'v0.1.0-beta.1', assets: [{ name: 'file.exe', size: 123 }] });
+    release = null;
+    assert.equal(await githubRelease('v0.1.0-beta.1'), null);
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ errors: [{ message: 'denied' }] }) });
+    await assert.rejects(githubRelease('v0.1.0-beta.1'), /query failed/);
+    globalThis.fetch = async () => ({ ok: false, status: 503 });
+    await assert.rejects(githubRelease('v0.1.0-beta.1'), /503/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (token === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = token;
+    if (repository === undefined) delete process.env.GITHUB_REPOSITORY; else process.env.GITHUB_REPOSITORY = repository;
+  }
+});
 
 function signingFixture() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');

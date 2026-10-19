@@ -31,6 +31,8 @@ Packaging output is staged and validated across all three targets before checksu
 
 Foundation evidence: [PR #1 and its required Windows/Mac checks](https://github.com/cunilab/Rexus-QZ-30-mouse/pull/1), followed by the [v0.1.1-beta.1 release run](https://github.com/cunilab/Rexus-QZ-30-mouse/actions/runs/39235833219). The beta tag points at the tested foundation merge; it is not a stable publication or proof of an installed update.
 
+The first beta run built and uploaded all three platforms but its final check used a REST tag endpoint that did not return the unpublished draft. Release lookup now uses GraphQL. The manual **Verify draft release** workflow downloads an existing draft and checks its complete inventory, SHA-256 checksums, updater signatures and tag-specific URLs without rebuilding, changing tags, or publishing. This also provides a repeatable check before manual publication. A successful verification run is separate from the historical failed run; do not rewrite the beta tag to hide that failure.
+
 Inspect the draft before publishing:
 
 - Version, tag commit, changelog, prerelease flag, and platform/architecture labels are correct.
