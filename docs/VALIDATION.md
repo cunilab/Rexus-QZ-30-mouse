@@ -1,5 +1,16 @@
 # Validation — first desktop slice
 
+## Milestone 2 ? 0.1.1-beta.3
+
+- Local Windows validation: 24 Node tests, 32 Rust tests, formatting, Clippy with warnings denied, version consistency, and optimized Tauri build passed.
+- Tests cover save-before-runtime-commit ordering, failed persistence retaining active assignments, listener loss during persistence, persistent Pause, default assignments without a receiver, strict settings migration/backup, and editable UI drafts.
+- Independent read-only review passed after fixing nonprompting Mac permission preflight and unsupported saved-mapping errors.
+- Required Windows/Mac PR checks are recorded in [PR #4](https://github.com/cunilab/Rexus-QZ-30-mouse/pull/4). Hosted build success does not establish physical Mac compatibility.
+- Updated portable app was opened on Windows device Andres. Original Mouse Assistant remained running; its conflict guard must be respected. No new physical remapping, tray-click, reconnect, actual login, or Mac runtime pass is claimed.
+
+The sections below are historical evidence; their test counts and enable-switch instructions describe earlier versions.
+
+
 Device: Windows `Andres`, 2026-10-18. Target: user-confirmed QZ30 Black, Windows and macOS.
 
 ## Original control layout and input capture update
