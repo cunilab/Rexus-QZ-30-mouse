@@ -182,12 +182,15 @@ export async function verifyDraft() {
     files.push(name);
   }
   files.push('SHA256SUMS.txt');
+  assert(files.length === 10 && files.includes('latest.json'), 'Expected all installers, updater packages, signatures, manifest and checksums');
   assert(release.assets.length === files.length && files.every(name => release.assets.some(asset => asset.name === name && asset.size === statSync(`release-assets/${name}`).size)), 'Draft inventory mismatch');
   for (const platform of platforms) {
     const update = feed.platforms[platform];
     const name = decodeURIComponent(new URL(update.url).pathname.split('/').at(-1));
     assert(update.url === `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(name)}` && name.startsWith(`${platform}-`) && files.includes(name) && files.includes(`${name}.sig`), 'Invalid updater download URL');
     assert(readFileSync(`release-assets/${name}.sig`, 'utf8').trim() === update.signature, 'Downloaded signature mismatch');
+    const ownFiles = files.filter(file => file.startsWith(`${platform}-`));
+    assert(platform.startsWith('windows') ? ownFiles.length === 2 && name.endsWith('-setup.exe') : ownFiles.length === 3 && name.endsWith('.app.tar.gz') && ownFiles.filter(file => file.endsWith('.dmg')).length === 1, 'Missing or incorrect platform installer');
     verifySignature(readFileSync(`release-assets/${name}`), update.signature, configuredPublicKey());
   }
   console.log(`${tag}: downloaded draft inventory, checksums, all three signatures and update URLs verified. Draft remains unpublished.`);
