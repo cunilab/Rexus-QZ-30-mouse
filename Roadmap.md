@@ -1,6 +1,6 @@
 # QZ Flow Roadmap
 
-Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Feature implementation has not started; an existing desktop-check workflow will be extended.
+Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestone 0 implementation is underway; application feature milestones have not started.
 
 ## Goal
 
@@ -20,27 +20,29 @@ Make QZ Flow a convenient daily mouse utility for Rexus QZ30 Black on Windows an
 
 ## Milestone 0 — Trunk-based Git and release foundation
 
-Status: planned; begin before feature implementation. A tagged release is produced only when its platform checks and release gates pass.
+Status: infrastructure implemented; hosted checks and prerelease packaging are being verified. A tagged release is produced only when its platform checks and release gates pass.
 
 Development workflow:
 
-- [ ] Use `main` as the single integration trunk, with short-lived `feat/`, `fix/`, and `chore/` branches and pull requests back to `main`.
-- [ ] Keep changes small, squash-merge completed PRs, and delete merged branches. Do not add long-lived develop or release branches.
-- [ ] Configure required CI checks and protection against accidental force pushes/deletion on `main`, subject to repository capabilities.
-- [ ] Use semantic versions and release notes. Keep package.json/package-lock.json, Cargo.toml/Cargo.lock, and tauri.conf.json versions consistent through one release command/check.
-- [ ] Create immutable `vX.Y.Z` tags from tested commits on `main`; prerelease tags such as `v0.2.0-beta.1` remain outside the stable update feed.
+- [x] Use `main` as the single integration trunk, with short-lived `feat/`, `fix/`, and `chore/` branches and pull requests back to `main`.
+- [x] Keep changes small, squash-merge completed PRs, and delete merged branches. Do not add long-lived develop or release branches.
+- [x] Configure required CI checks and protection against accidental force pushes/deletion on `main`, subject to repository capabilities.
+- [x] Use semantic versions and release notes. Keep package.json/package-lock.json, Cargo.toml/Cargo.lock, and tauri.conf.json versions consistent through one release command/check.
+- [x] Create immutable `vX.Y.Z` tags from tested commits on `main`; prerelease tags such as `v0.2.0-beta.1` remain outside the stable update feed.
 
 GitHub Actions:
 
-- [ ] Extend existing `.github/workflows/check.yml` for PRs and `main`: formatting, UI/Rust tests, Clippy, version consistency, and Windows/Mac build checks.
-- [ ] Add `.github/workflows/release.yml` triggered by version tags, with manual dispatch for a specified validated tag.
-- [ ] Reject mismatched tag/application versions and release commits outside `main`; run required checks against the exact release commit.
-- [ ] Build Windows x64 and macOS Intel/Apple Silicon artifacts. Select installer formats and the Mac universal-versus-separate packaging approach during implementation.
-- [ ] Use official Tauri release tooling to produce installers, updater artifacts, signatures, and updater metadata (`latest.json`).
-- [ ] Store signing secrets in GitHub Actions secrets; keep the updater public key in app configuration. Updater signatures are separate from Windows code signing and Apple signing/notarization.
-- [ ] Keep PR workflows read-only and without signing secrets; grant release write permissions only to the release jobs that require them.
-- [ ] Assemble a draft GitHub Release with changelog, artifacts, signatures, and checksums. Publish stable releases only after all intended artifacts are present and verified.
-- [ ] Preserve a failed build as a failed/unpublished release; never advertise a partial release through the stable updater endpoint.
+- [x] Extend existing `.github/workflows/check.yml` for PRs and `main`: formatting, UI/Rust tests, Clippy, version consistency, and Windows/Mac build checks.
+- [x] Add `.github/workflows/release.yml` triggered by version tags, with manual dispatch for a specified validated tag.
+- [x] Reject mismatched tag/application versions and release commits outside `main`; run required checks against the exact release commit.
+- [x] Build Windows x64 and separate macOS Intel/Apple Silicon artifacts: NSIS on Windows, app archives and DMGs on Mac. Hosted output verification is pending.
+- [x] Use official Tauri release tooling to produce installers, updater artifacts, signatures, and updater metadata (`latest.json`).
+- [x] Store signing secrets in GitHub Actions secrets; keep the updater public key in app configuration. Updater signatures are separate from Windows code signing and Apple signing/notarization.
+- [x] Keep PR workflows read-only and without signing secrets; grant release write permissions only to the release jobs that require them.
+- [x] Implement complete-artifact validation and draft-release assembly with changelog, signatures, and checksums. Hosted draft creation is pending.
+- [x] Preserve a failed build as a failed/unpublished release; never advertise a partial release through the stable updater endpoint.
+
+Verified setup: squash-only merges and merged-branch deletion; required Windows/Mac checks and PRs on `main`; immutable `v*` tag rules; GitHub published-release immutability; updater signing secret configured. Local backup is outside Git. Windows Authenticode and Apple signing/notarization are unavailable and disclosed in release notes. The first pipeline test is `0.1.1-beta.1`; no stable release is published automatically.
 
 Acceptance:
 
