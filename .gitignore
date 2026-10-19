@@ -2,6 +2,12 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/
 dist/
+release-assets/
+release-notes.txt
+.release-test/
+*.key
+*.p12
+*.pfx
 analysis/windows/
 analysis/macos/
 *.zip
