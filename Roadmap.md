@@ -65,7 +65,7 @@ Status: implemented in 0.1.1-beta.2; native Windows/Mac GUI and actual login che
 - [x] Prevent duplicate running instances; reopening the app reveals the existing window.
 - [x] Reflect current mapping status in the tray/menu-bar controls.
 
-Startup registration uses the current executable/app location. Keep portable Windows builds in a stable folder before enabling Launch at login; registration starts disabled and is changed only through the user's setting. Milestone 1 starts mappings paused; automatic restoration/activation belongs to Milestone 2. Resume uses the existing receiver, original-utility conflict, and permission checks.
+Startup registration uses the current executable/app location. Keep the app in a permanent installed location before enabling Launch at login; registration starts disabled and is changed only through the user's setting. Windows uses only the current user's startup entry, with quoted paths and command-length validation. Mac uses an XML-safe LaunchAgent file. Milestone 1 starts mappings paused; automatic restoration/activation belongs to Milestone 2. Resume uses the existing receiver, original-utility conflict, and permission checks.
 
 Acceptance:
 

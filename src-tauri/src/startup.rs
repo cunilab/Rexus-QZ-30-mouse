@@ -31,7 +31,11 @@ mod native {
         let path = path
             .to_str()
             .ok_or("Startup executable path is not valid Unicode.")?;
-        Ok(format!("\"{path}\" --autostart"))
+        let command = format!("\"{path}\" --autostart");
+        if command.encode_utf16().count() > 260 {
+            return Err("Windows startup commands are limited to 260 characters. Move QZ Flow to a shorter path before enabling launch at login.".into());
+        }
+        Ok(command)
     }
 
     fn command() -> Result<String, String> {
@@ -82,6 +86,21 @@ mod native {
                 command_for(Path::new(r"C:\Program Files\QZ Flow\QZ Flow.exe")).unwrap(),
                 r#""C:\Program Files\QZ Flow\QZ Flow.exe" --autostart"#
             );
+        }
+        #[test]
+        fn run_command_limit_counts_utf16_before_registration() {
+            let overhead = command_for(Path::new("")).unwrap().encode_utf16().count();
+            let path = "a".repeat(260 - overhead);
+            assert_eq!(
+                command_for(Path::new(&path))
+                    .unwrap()
+                    .encode_utf16()
+                    .count(),
+                260
+            );
+            assert!(command_for(Path::new(&format!("{path}a"))).is_err());
+            let unicode = format!("{}\u{1f42d}", "a".repeat(259 - overhead));
+            assert!(command_for(Path::new(&unicode)).is_err());
         }
         #[test]
         fn task_manager_disabled_entries_are_not_reported_enabled() {

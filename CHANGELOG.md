@@ -11,6 +11,7 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 - Optional launch at login, with login launches hidden in the tray or Mac menu bar.
 - Close to tray/menu bar, with Open, Pause/Resume mappings, status, and Quit commands.
 - Reopening the app restores the existing window instead of starting another listener.
+- Startup paths support spaces and XML characters; Windows registration affects only the current user and rejects paths exceeding its startup-command limit.
 
 ### Validation limits
 
