@@ -16,6 +16,7 @@ class Element {
     this.disabled = false;
     this.classList = { toggle() {} };
   }
+  focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   add(option) { this.children.push(option); }
   addEventListener(name, callback) { this.events[name] = callback; }
@@ -342,4 +343,31 @@ test("unknown mapping state is not presented as active and permissions point to 
   native.app.click("permission");
   await tick();
   assert.match(native.app.get("message").textContent, /Save and apply again/);
+});
+
+
+test("Settings navigation preserves mapping drafts and changes no native settings", async () => {
+  const native = nativeApp();
+  const { app, calls } = native;
+  await tick();
+  app.change("back", "copy");
+  const count = calls.length;
+  app.click("nav-settings");
+  assert.equal(app.get("controls-page").hidden, true);
+  assert.equal(app.get("settings-page").hidden, false);
+  assert.equal(app.get("nav-settings")["aria-current"], "page");
+  assert.equal(app.get("nav-controls")["aria-current"], "false");
+  assert.equal(app.get("page-name").textContent, "Settings");
+  assert.equal(app.get("settings-title").focused, true);
+  assert.equal(calls.length, count);
+  app.startup(true);
+  await tick();
+  assert.equal(native.status.launch_at_login, true);
+  app.click("nav-controls");
+  assert.equal(app.get("controls-page").hidden, false);
+  assert.equal(app.get("settings-page").hidden, true);
+  assert.equal(app.get("page-name").textContent, "QZ30 Black");
+  assert.equal(app.get("controls-title").focused, true);
+  assert.equal(app.get("mapping-back").value, "copy");
+  assert.equal(app.get("draft-state").textContent, "Unsaved changes");
 });
