@@ -1,6 +1,6 @@
 # QZ Flow Roadmap
 
-Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0 and 1 are implemented; native lifecycle verification limits are recorded below.
+Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0, 1, and 2 are implemented; native lifecycle verification limits are recorded below.
 
 ## Goal
 
@@ -65,7 +65,7 @@ Status: implemented in 0.1.1-beta.2; native Windows/Mac GUI and actual login che
 - [x] Prevent duplicate running instances; reopening the app reveals the existing window.
 - [x] Reflect current mapping status in the tray/menu-bar controls.
 
-Startup registration uses the current executable/app location. Keep the app in a permanent installed location before enabling Launch at login; registration starts disabled and is changed only through the user's setting. Windows uses only the current user's startup entry, with quoted paths and command-length validation. Mac uses an XML-safe LaunchAgent file. Milestone 1 starts mappings paused; automatic restoration/activation belongs to Milestone 2. Resume uses the existing receiver, original-utility conflict, and permission checks.
+Startup registration uses the current executable/app location. Keep the app in a permanent installed location before enabling Launch at login; registration starts disabled and is changed only through the user's setting. Windows uses only the current user's startup entry, with quoted paths and command-length validation. Mac uses an XML-safe LaunchAgent file. Milestone 2 adds guarded automatic restoration and persistent explicit Pause. Resume uses the existing receiver, original-utility conflict, and permission checks.
 
 Acceptance:
 
@@ -78,15 +78,15 @@ Acceptance:
 
 ## Milestone 2 — Save and apply
 
-Status: planned; depends on Milestone 1.
+Status: implemented in 0.1.1-beta.3. Automated Windows transaction, settings migration, and UI checks pass; physical receiver reconnection, actual login, and Mac runtime checks remain manual.
 
-- [ ] Replace the enable switch workflow with Save assignments and immediate activation.
-- [ ] Permit editing while existing assignments remain active; draft changes take effect only after Save.
-- [ ] Validate assignments and prerequisites before replacing working settings.
-- [ ] Coordinate persistence and runtime activation, with rollback on failure.
-- [ ] Restore saved assignments on startup when prerequisites are satisfied.
-- [ ] Add status and actionable errors for missing receivers, permissions, or vendor-utility conflicts.
-- [ ] Keep existing user settings compatible with the new format.
+- [x] Replace the enable switch workflow with Save assignments and immediate activation.
+- [x] Permit editing while existing assignments remain active; draft changes take effect only after Save.
+- [x] Validate assignments and prerequisites before replacing working settings.
+- [x] Coordinate persistence and runtime activation, with rollback on failure.
+- [x] Restore saved assignments on startup when prerequisites are satisfied.
+- [x] Add status and actionable errors for missing receivers, permissions, or vendor-utility conflicts.
+- [x] Keep existing user settings compatible with the new format.
 
 Acceptance:
 
@@ -96,6 +96,8 @@ Acceptance:
 - Upgrade preserves existing assignments; startup never falsely reports Active.
 - Device loss stops remapping safely. Reconnection can restore an automatically suspended configuration after prerequisite checks, but must respect an explicit user Pause.
 - Default-only settings pass through normally without requiring a non-default action.
+
+Settings use a versioned envelope with a persistent Pause preference. Legacy assignments load unchanged and resume after prerequisite checks; before replacing a legacy, invalid, or unsupported file, QZ Flow keeps an exact sibling backup. Save validates and prepares the listener, persists atomically, then commits new assignments. A failed write leaves previous assignments active; an environmental failure suspends unsafe mappings while preserving settings. Pause always stops this session, and reports if the preference cannot be persisted. Default-only assignments need no receiver. Automatic retries never request macOS permission.
 
 ## Milestone 3 — Expanded actions and button editor
 

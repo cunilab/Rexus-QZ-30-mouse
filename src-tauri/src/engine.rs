@@ -84,6 +84,7 @@ impl Input {
 #[derive(Default)]
 pub struct Engine {
     pub enabled: bool,
+    pub paused: bool,
     pub mappings: Mappings,
     pub last_input: Option<String>,
     pub error: Option<String>,
@@ -93,7 +94,7 @@ pub struct Engine {
 impl Engine {
     pub fn action(&mut self, input: Input, down: bool) -> Action {
         self.last_input = Some(input.label().into());
-        if self.enabled && down && self.suppressed & input.button_bit() == 0 {
+        if self.enabled && !self.paused && down && self.suppressed & input.button_bit() == 0 {
             self.mappings.action(input)
         } else {
             Action::Default

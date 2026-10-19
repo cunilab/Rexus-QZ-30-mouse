@@ -4,6 +4,20 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+## [0.1.1-beta.3]
+
+### Changed
+
+- Save and apply replaces the enable switch; assignments can be edited while current mappings run.
+- Saved assignments restore automatically after receiver, permission, and original-utility checks, including after reconnection.
+- Explicit Pause persists across restarts; Save resumes mappings. Default-only assignments work without a receiver.
+- Settings migrate without losing legacy assignments; original legacy or invalid files are backed up before replacement.
+- Failed activation or persistence preserves previous assignments and reports the failure. A failed Pause write still stops mappings for the current session.
+
+### Validation limits
+
+- Windows physical reconnect/login/tray interaction and macOS runtime require manual checks. Automatic recovery checks prerequisites every two seconds.
+
 ## [0.1.1-beta.2]
 
 ### Added

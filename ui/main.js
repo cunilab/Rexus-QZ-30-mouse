@@ -78,10 +78,9 @@ function acceptStatus(next, adoptMappings = false) {
 
 function render() {
   const preview = !invoke;
-  const enabled = Boolean(status?.enabled);
   const detected = Boolean(status?.devices?.length);
   const dirty = isDirty();
-  const hasMapping = inputs.some(([key]) => saved[key] !== "default");
+  const retry = status?.paused === true || status?.mapping_state === "unavailable";
   const unavailable = preview || !initialized || connectionFailed;
   byId("preview").hidden = !preview;
   byId("receiver-status").textContent = preview ? "Interface preview" : connectionFailed ? "Connection unavailable" : detected ? "Compatible receiver detected" : initialized ? "No compatible receiver detected" : "Checking receiver…";
@@ -94,14 +93,14 @@ function render() {
   byId("draft-state").classList.toggle("dirty", dirty);
   for (const [key] of inputs) {
     byId(`mapping-${key}`).value = draft[key];
-    byId(`mapping-${key}`).disabled = (key === "thumb" && !status?.thumb_available) || busy || enabled || (!preview && unavailable);
+    byId(`mapping-${key}`).disabled = (key === "thumb" && !status?.thumb_available) || busy || (!preview && unavailable);
   }
-  byId("save").disabled = unavailable || busy || enabled || !dirty;
-  byId("save").textContent = busy ? "Please wait…" : "Save assignments ↗";
-  byId("reset").disabled = busy || enabled || (!preview && unavailable) || inputs.every(([key]) => draft[key] === "default");
-  byId("enable").disabled = busy || (unavailable && !enabled) || (!enabled && (!detected || !hasMapping || dirty));
-  byId("enable").setAttribute("aria-checked", String(enabled));
-  byId("enable-detail").textContent = enabled ? (status.hook_running ? "Mappings are active. Switch off to edit." : "Mappings enabled; input listener is not running.") : preview ? "Desktop connection required to enable." : connectionFailed ? "Waiting for the desktop connection." : dirty ? "Save your changes before enabling." : !detected ? "Connect a compatible receiver first." : !hasMapping ? "Choose and save at least one shortcut." : status?.permission === "required" ? "Enable to request macOS input permissions." : "Ready when you are. Enable to start.";
+  byId("save").disabled = unavailable || busy || (!dirty && !retry);
+  byId("save").textContent = busy ? "Please wait…" : "Save and apply";
+  byId("reset").disabled = busy || (!preview && unavailable) || inputs.every(([key]) => draft[key] === "default");
+  const mappingState = status?.mapping_state;
+  byId("mapping-status").textContent = preview ? "Interface preview" : connectionFailed ? "Connection unavailable" : !initialized ? "Checking mappings..." : mappingState === "active" ? "Mappings active" : mappingState === "paused" ? "Mappings paused" : mappingState === "default" ? "Default behavior" : "Mappings unavailable";
+  byId("mapping-detail").textContent = preview ? "Open the desktop app to apply assignments." : connectionFailed ? "Waiting for the desktop connection." : !initialized ? "Reading saved assignments." : status?.paused ? "Save and apply resumes mappings. You can also Resume from the tray or menu bar." : mappingState === "unavailable" ? "Save and apply to retry. Check the error message and macOS input permissions if required." : dirty ? "Your edits are a draft. Current behavior continues until you Save and apply." : mappingState === "active" ? "Saved assignments are running. Pause or Resume from the tray or menu bar." : "Choose an assignment, then Save and apply.";
   byId("permission").hidden = status?.platform !== "macos" || status?.permission !== "required";
   byId("permission").disabled = busy;
   const startupAvailable = typeof status?.launch_at_login === "boolean";
@@ -145,17 +144,14 @@ async function runCommand(command, args, success) {
 }
 
 byId("save").addEventListener("click", () => {
-  if (!byId("save").disabled) runCommand("save_mappings", { mappings: { ...draft } }, "Assignments saved on this computer.");
+  if (!byId("save").disabled) runCommand("save_mappings", { mappings: { ...draft } }, "Assignments saved and applied.");
 });
 byId("reset").addEventListener("click", () => {
   draft = { ...defaults };
   render();
   showMessage("Defaults restored in your draft. Save to apply.");
 });
-byId("enable").addEventListener("click", () => {
-  if (!byId("enable").disabled) runCommand("set_enabled", { enabled: !status.enabled }, status.enabled ? "Mappings disabled." : "Mappings enabled.");
-});
-byId("permission").addEventListener("click", () => runCommand("open_input_settings", {}, "Input settings opened. Grant access, then enable mappings again."));
+byId("permission").addEventListener("click", () => runCommand("open_input_settings", {}, "Input settings opened. Grant access, then Save and apply again."));
 byId("launch-at-login").addEventListener("change", () => {
   if (!byId("launch-at-login").disabled) runCommand("set_launch_at_login", { enabled: byId("launch-at-login").checked }, "Login setting updated.");
 });

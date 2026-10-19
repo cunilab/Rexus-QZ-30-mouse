@@ -64,23 +64,29 @@ function setup(invoke) {
   };
 }
 
-function nativeApp() {
+function nativeApp(initial = {}) {
   let status = {
     platform: "windows", devices: [{ transport: "USB" }], enabled: false,
     permission: "granted", hook_running: false, last_input: null, error: null,
     thumb_available: true,
     launch_at_login: false,
+    paused: false, mapping_state: "default",
     mappings: Object.fromEntries(["back", "forward", "middle", "wheel_left", "wheel_right"].map((key) => [key, "default"])),
+    ...initial,
   };
   let failure = null;
+  let saveFailure = null;
   let readGate = null;
   const calls = [];
   const app = setup(async (command, args) => {
     calls.push(command);
     if (failure) throw new Error(failure);
     if (command === "get_status" && readGate) await readGate;
-    if (command === "save_mappings") status = { ...status, mappings: { ...args.mappings } };
-    if (command === "set_enabled") status = { ...status, enabled: args.enabled, hook_running: args.enabled };
+    if (command === "save_mappings") {
+      if (saveFailure) throw new Error(saveFailure);
+      const active = Object.values(args.mappings).some((action) => action !== "default");
+      status = { ...status, mappings: { ...args.mappings }, paused: false, enabled: active, hook_running: active, mapping_state: active ? "active" : "default", error: null };
+    }
     if (command === "set_launch_at_login") status = { ...status, launch_at_login: args.enabled };
     return structuredClone(status);
   });
@@ -88,6 +94,7 @@ function nativeApp() {
     app, calls,
     get status() { return status; },
     fail(message) { failure = message; },
+    failSave(message) { saveFailure = message; },
     holdReads() {
       let release;
       readGate = new Promise((resolve) => { release = resolve; });
@@ -96,16 +103,15 @@ function nativeApp() {
   };
 }
 
-test("browser preview cannot save, enable, or fabricate a receiver", () => {
+test("browser preview cannot save or fabricate a receiver and has no enable switch", () => {
   const app = setup();
   assert.equal(app.get("preview").hidden, false);
   assert.equal(app.get("receiver-status").textContent, "Interface preview");
   app.change("back", "copy");
   assert.equal(app.get("save").disabled, true);
-  assert.equal(app.get("enable").disabled, true);
   app.click("save");
-  app.click("enable");
-  assert.equal(app.get("enable")["aria-checked"], "false");
+  assert(!html.includes('id="enable"'));
+  assert(!source.includes('"set_enabled"'));
 });
 
 test("original numbering and actions follow native thumb availability", async () => {
@@ -127,25 +133,31 @@ test("original numbering and actions follow native thumb availability", async ()
   assert.equal(app.get("mapping-thumb").disabled, true);
 });
 
-test("polling preserves drafts and assignments must be saved before enable", async () => {
-  const { app, calls } = nativeApp();
+test("saving applies immediately and active mappings stay editable as drafts", async () => {
+  const native = nativeApp();
+  const { app, calls } = native;
   await tick();
   assert.equal(app.get("receiver-status").textContent, "Compatible receiver detected");
-  assert.equal(app.get("enable").disabled, true);
+  assert.equal(app.get("mapping-status").textContent, "Default behavior");
   app.change("back", "copy");
   await app.poll();
   assert.equal(app.get("mapping-back").value, "copy");
   assert.equal(app.get("draft-state").textContent, "Unsaved changes");
-  app.click("enable");
-  assert(!calls.includes("set_enabled"));
+  assert.equal(native.status.enabled, false);
   app.click("save");
   await tick();
-  assert.equal(app.get("enable").disabled, false);
-  app.click("enable");
-  await tick();
-  assert.equal(app.get("enable")["aria-checked"], "true");
-  assert.equal(app.get("mapping-back").disabled, true);
+  assert.equal(native.status.enabled, true);
+  assert.equal(app.get("mapping-status").textContent, "Mappings active");
+  assert.equal(app.get("message").textContent, "Assignments saved and applied.");
+  assert.equal(app.get("mapping-back").disabled, false);
   assert.equal(app.get("save").disabled, true);
+  app.change("back", "paste");
+  assert.equal(native.status.mappings.back, "copy");
+  assert.equal(app.get("save").disabled, false);
+  assert.match(app.get("mapping-detail").textContent, /draft/);
+  await app.poll();
+  assert.equal(app.get("mapping-back").value, "paste");
+  assert(!calls.includes("set_enabled"));
 });
 
 test("save waits for an outstanding read and polling never overlaps", async () => {
@@ -187,7 +199,7 @@ test("native failures remain visible, preserve edits, and recover controls", asy
   native.app.click("save");
   await tick();
   assert.equal(native.status.mappings.back, "undo");
-  assert.equal(native.app.get("enable").disabled, false);
+  assert.equal(native.app.get("mapping-status").textContent, "Mappings active");
 });
 
 test("launch at login starts off, uses OS status, and preserves mapping drafts", async () => {
@@ -254,4 +266,80 @@ test("login control stays disabled while another command is pending", async () =
   await pending;
   await tick();
   assert.equal(native.app.get("launch-at-login").disabled, false);
+});
+
+test("failed saves preserve the previous runtime, saved assignments, and draft", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("back", "copy");
+  native.app.click("save");
+  await tick();
+  native.app.change("back", "paste");
+  native.failSave("Activation failed; previous assignments restored");
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.mappings.back, "copy");
+  assert.equal(native.status.enabled, true);
+  assert.equal(native.app.get("mapping-status").textContent, "Mappings active");
+  assert.equal(native.app.get("mapping-back").value, "paste");
+  assert.equal(native.app.get("draft-state").textContent, "Unsaved changes");
+  assert.equal(native.app.get("save").disabled, false);
+  assert.match(native.app.get("message").textContent, /Activation failed/);
+  native.failSave(null);
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.mappings.back, "paste");
+});
+
+test("saving unchanged paused mappings resumes and unavailable mappings can retry", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("back", "copy");
+  native.app.click("save");
+  await tick();
+  Object.assign(native.status, { paused: true, enabled: false, hook_running: false, mapping_state: "paused" });
+  await native.app.poll();
+  assert.equal(native.app.get("draft-state").textContent, "Saved locally");
+  assert.match(native.app.get("mapping-detail").textContent, /resumes/);
+  assert.equal(native.app.get("save").disabled, false);
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.paused, false);
+  assert.equal(native.status.mapping_state, "active");
+  Object.assign(native.status, { enabled: false, hook_running: false, mapping_state: "unavailable", error: "Close the original utility" });
+  await native.app.poll();
+  assert.equal(native.app.get("save").disabled, false);
+  assert.equal(native.app.get("mapping-status").textContent, "Mappings unavailable");
+  assert.match(native.app.get("message").textContent, /original utility/);
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.mapping_state, "active");
+});
+
+test("all-default saves work without a receiver and restore default behavior", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("back", "copy");
+  native.app.click("save");
+  await tick();
+  native.status.devices = [];
+  await native.app.poll();
+  native.app.click("reset");
+  assert.equal(native.app.get("save").disabled, false);
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.enabled, false);
+  assert.equal(native.status.mapping_state, "default");
+  assert.equal(native.app.get("mapping-status").textContent, "Default behavior");
+  assert.equal(native.app.get("draft-state").textContent, "Saved locally");
+});
+
+test("unknown mapping state is not presented as active and permissions point to Save", async () => {
+  const native = nativeApp({ platform: "macos", permission: "required", mapping_state: "future_state" });
+  await tick();
+  assert.equal(native.app.get("mapping-status").textContent, "Mappings unavailable");
+  assert.equal(native.app.get("permission").hidden, false);
+  native.app.click("permission");
+  await tick();
+  assert.match(native.app.get("message").textContent, /Save and apply again/);
 });

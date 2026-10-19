@@ -51,7 +51,7 @@ extern "C" {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
-    fn CGRequestListenEventAccess() -> bool;
+    fn CGPreflightListenEventAccess() -> bool;
     fn CGEventTapCreate(
         tap: u32,
         place: u32,
@@ -153,7 +153,9 @@ pub fn devices() -> Result<Vec<Device>, String> {
 }
 
 pub fn permission() -> &'static str {
-    if unsafe { AXIsProcessTrusted() } {
+    if unsafe {
+        AXIsProcessTrusted() && CGPreflightListenEventAccess() && CGPreflightPostEventAccess()
+    } {
         "granted"
     } else {
         "required"
@@ -199,11 +201,8 @@ impl Drop for Hook {
 }
 
 pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
-    unsafe {
-        CGRequestListenEventAccess();
-    }
     if permission() != "granted" {
-        return Err("Allow QZ Flow in System Settings > Privacy & Security > Accessibility and Input Monitoring, then restart the app.".into());
+        return Err("Allow QZ Flow in System Settings > Privacy & Security > Accessibility and Input Monitoring, then save again.".into());
     }
     let _ = SHARED.set(shared.clone());
     let (sender, receiver) = mpsc::sync_channel(1);
