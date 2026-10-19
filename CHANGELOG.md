@@ -4,6 +4,25 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+## [0.1.1-beta.4]
+
+### Added
+
+- Grouped action catalog: desktop switching, window controls, browser tabs, editing, media, zoom, and screenshot shortcuts.
+- Custom keyboard shortcuts with modifier/key selection and native focused-window recording.
+- Native application picker and application launch assignments.
+- Selectable QZ30 mouse markers and last-input highlighting.
+- Disable assignments for inputs whose native OS events can be suppressed.
+
+### Changed
+
+- Version 2 settings preserve legacy/version 1 assignments and make an exact backup before migration.
+- Application launch runs outside the input listener; asynchronous launch failures appear in status.
+
+### Validation limits
+
+- Physical Windows/Mac actions, native recording/dialog behavior, and OS shortcut configuration need user verification. Secure system shortcuts cannot be guaranteed recordable. Mac proprietary thumb input remains unavailable.
+
 - Dedicated Settings page for Launch at login and window behavior, separate from mouse assignments.
 
 ## [0.1.1-beta.3]

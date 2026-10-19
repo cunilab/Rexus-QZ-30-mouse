@@ -3,6 +3,7 @@
 mod engine;
 mod lifecycle;
 mod platform;
+mod recording;
 mod runtime;
 mod settings;
 mod startup;
@@ -40,6 +41,7 @@ pub struct Shared {
     inventory: Mutex<Inventory>,
     hook_running: AtomicBool,
     stopping: AtomicBool,
+    recording: AtomicBool,
 }
 
 impl Shared {
@@ -76,6 +78,10 @@ impl Shared {
         }
         if engine.is_suppressed(input) {
             return true;
+        }
+        if self.recording.load(Ordering::Acquire) {
+            engine.action(input, false);
+            return false;
         }
         let action = engine.action(input, true);
         if action == Action::Default {
@@ -209,6 +215,42 @@ fn open_input_settings() -> Result<(), String> {
     platform::open_input_settings()
 }
 
+#[tauri::command]
+async fn record_shortcut(app: tauri::AppHandle) -> Result<Option<Action>, String> {
+    let shared = app.state::<AppState>().shared.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if shared
+            .recording
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err("A shortcut recording is already running.".into());
+        }
+        struct Session(Arc<Shared>);
+        impl Drop for Session {
+            fn drop(&mut self) {
+                self.0.recording.store(false, Ordering::Release);
+            }
+        }
+        let _session = Session(shared);
+        let action = recording::record(&app)?;
+        if let Some(action) = &action {
+            action.validate()?;
+            platform::validate_action(action)?;
+        }
+        Ok(action)
+    })
+    .await
+    .map_err(|error| format!("Shortcut recorder failed: {error}"))?
+}
+
+#[tauri::command]
+async fn pick_application() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(platform::pick_application)
+        .await
+        .map_err(|error| format!("Application picker failed: {error}"))?
+}
+
 fn main() {
     if std::env::args().any(|arg| arg == "--trace-buttons") {
         #[cfg(windows)]
@@ -287,7 +329,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_status, save_mappings, open_input_settings, set_launch_at_login])
+        .invoke_handler(tauri::generate_handler![get_status, save_mappings, open_input_settings, set_launch_at_login, record_shortcut, pick_application])
         .build(tauri::generate_context!())
         .expect("Could not start QZ Flow")
         .run(|app, event| {
@@ -322,6 +364,24 @@ mod tests {
         assert!(!status.enabled);
         assert!(status.paused);
         assert_eq!(status.mapping_state, "paused");
+    }
+
+    #[test]
+    fn recording_bypasses_mapped_actions_but_retains_consumed_releases() {
+        let shared = Shared::default();
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.back = Action::Copy;
+            engine.suppress_press(Input::Middle);
+        }
+        shared.recording.store(true, Ordering::Release);
+        assert!(!shared.process(Input::Back, true, |_| panic!(
+            "must not inject during recording"
+        )));
+        assert!(shared.process(Input::Middle, false, |_| Ok(())));
+        shared.recording.store(false, Ordering::Release);
+        assert!(shared.process(Input::Back, true, |_| Ok(())));
     }
 
     #[test]

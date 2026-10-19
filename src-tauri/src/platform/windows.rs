@@ -240,10 +240,11 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     CallNextHookEx(null_mut(), code, wparam, lparam)
 }
 
-fn shortcut(action: Action) -> Vec<u16> {
-    match action {
-        Action::Default => vec![],
+fn shortcut(action: &Action) -> Result<Vec<u16>, String> {
+    Ok(match action {
+        Action::Default | Action::Disable => vec![],
         Action::Copy => vec![VK_CONTROL, b'C' as u16],
+        Action::Cut => vec![VK_CONTROL, b'X' as u16],
         Action::Paste => vec![VK_CONTROL, b'V' as u16],
         Action::Undo => vec![VK_CONTROL, b'Z' as u16],
         Action::Redo => vec![VK_CONTROL, b'Y' as u16],
@@ -254,7 +255,219 @@ fn shortcut(action: Action) -> Vec<u16> {
         Action::TaskView => vec![VK_LWIN, VK_TAB],
         Action::VolumeUp => vec![VK_VOLUME_UP],
         Action::VolumeDown => vec![VK_VOLUME_DOWN],
+        Action::PreviousDesktop => vec![VK_CONTROL, VK_LWIN, VK_LEFT],
+        Action::NextDesktop => vec![VK_CONTROL, VK_LWIN, VK_RIGHT],
+        Action::SwitchApps => vec![VK_MENU, VK_TAB],
+        Action::PreviousTab => vec![VK_CONTROL, VK_SHIFT, VK_TAB],
+        Action::NextTab => vec![VK_CONTROL, VK_TAB],
+        Action::NewTab => vec![VK_CONTROL, b'T' as u16],
+        Action::CloseTab => vec![VK_CONTROL, b'W' as u16],
+        Action::ReopenTab => vec![VK_CONTROL, VK_SHIFT, b'T' as u16],
+        Action::Refresh => vec![VK_CONTROL, b'R' as u16],
+        Action::Mute => vec![VK_VOLUME_MUTE],
+        Action::PlayPause => vec![VK_MEDIA_PLAY_PAUSE],
+        Action::PreviousTrack => vec![VK_MEDIA_PREV_TRACK],
+        Action::NextTrack => vec![VK_MEDIA_NEXT_TRACK],
+        Action::ZoomIn => vec![VK_CONTROL, VK_OEM_PLUS],
+        Action::ZoomOut => vec![VK_CONTROL, VK_OEM_MINUS],
+        Action::ZoomReset => vec![VK_CONTROL, b'0' as u16],
+        Action::Screenshot => vec![VK_LWIN, VK_SHIFT, b'S' as u16],
+        Action::CustomShortcut { key, modifiers } => {
+            let mut keys = Vec::new();
+            for modifier in modifiers {
+                let code = match modifier.as_str() {
+                    "control" => VK_CONTROL,
+                    "alt" => VK_MENU,
+                    "shift" => VK_SHIFT,
+                    "meta" => VK_LWIN,
+                    _ => return Err(format!("Unknown shortcut modifier: {modifier}")),
+                };
+                if keys.contains(&code) {
+                    return Err("Shortcut modifiers must be unique.".into());
+                }
+                keys.push(code);
+            }
+            keys.push(custom_key(key).ok_or_else(|| format!("Unsupported shortcut key: {key}"))?);
+            keys
+        }
+        Action::Minimize | Action::Maximize | Action::LaunchApplication { .. } => {
+            return Err("This action does not use a keyboard shortcut.".into());
+        }
+    })
+}
+
+fn custom_key(key: &str) -> Option<u16> {
+    if let Some(letter) = key.strip_prefix("Key").filter(|s| s.len() == 1) {
+        return letter.as_bytes()[0]
+            .is_ascii_uppercase()
+            .then_some(letter.as_bytes()[0] as u16);
     }
+    if let Some(digit) = key.strip_prefix("Digit").filter(|s| s.len() == 1) {
+        return digit.as_bytes()[0]
+            .is_ascii_digit()
+            .then_some(digit.as_bytes()[0] as u16);
+    }
+    if let Some(number) = key.strip_prefix('F').and_then(|s| s.parse::<u16>().ok()) {
+        if (1..=12).contains(&number) && key == format!("F{number}") {
+            return Some(VK_F1 + number - 1);
+        }
+    }
+    Some(match key {
+        "ArrowLeft" => VK_LEFT,
+        "ArrowRight" => VK_RIGHT,
+        "ArrowUp" => VK_UP,
+        "ArrowDown" => VK_DOWN,
+        "Space" => VK_SPACE,
+        "Enter" => VK_RETURN,
+        "Escape" => VK_ESCAPE,
+        "Tab" => VK_TAB,
+        "Backspace" => VK_BACK,
+        "Delete" => VK_DELETE,
+        "Home" => VK_HOME,
+        "End" => VK_END,
+        "PageUp" => VK_PRIOR,
+        "PageDown" => VK_NEXT,
+        "Insert" => VK_INSERT,
+        "Minus" => VK_OEM_MINUS,
+        "Equal" => VK_OEM_PLUS,
+        "BracketLeft" => VK_OEM_4,
+        "BracketRight" => VK_OEM_6,
+        "Backslash" => VK_OEM_5,
+        "Semicolon" => VK_OEM_1,
+        "Quote" => VK_OEM_7,
+        "Comma" => VK_OEM_COMMA,
+        "Period" => VK_OEM_PERIOD,
+        "Slash" => VK_OEM_2,
+        "Backquote" => VK_OEM_3,
+        _ => return None,
+    })
+}
+
+fn custom_scan(key: &str) -> Option<u16> {
+    Some(match key {
+        "Escape" => 0x01,
+        "Digit1" => 0x02,
+        "Digit2" => 0x03,
+        "Digit3" => 0x04,
+        "Digit4" => 0x05,
+        "Digit5" => 0x06,
+        "Digit6" => 0x07,
+        "Digit7" => 0x08,
+        "Digit8" => 0x09,
+        "Digit9" => 0x0a,
+        "Digit0" => 0x0b,
+        "Minus" => 0x0c,
+        "Equal" => 0x0d,
+        "Backspace" => 0x0e,
+        "Tab" => 0x0f,
+        "KeyQ" => 0x10,
+        "KeyW" => 0x11,
+        "KeyE" => 0x12,
+        "KeyR" => 0x13,
+        "KeyT" => 0x14,
+        "KeyY" => 0x15,
+        "KeyU" => 0x16,
+        "KeyI" => 0x17,
+        "KeyO" => 0x18,
+        "KeyP" => 0x19,
+        "BracketLeft" => 0x1a,
+        "BracketRight" => 0x1b,
+        "Enter" => 0x1c,
+        "KeyA" => 0x1e,
+        "KeyS" => 0x1f,
+        "KeyD" => 0x20,
+        "KeyF" => 0x21,
+        "KeyG" => 0x22,
+        "KeyH" => 0x23,
+        "KeyJ" => 0x24,
+        "KeyK" => 0x25,
+        "KeyL" => 0x26,
+        "Semicolon" => 0x27,
+        "Quote" => 0x28,
+        "Backquote" => 0x29,
+        "Backslash" => 0x2b,
+        "KeyZ" => 0x2c,
+        "KeyX" => 0x2d,
+        "KeyC" => 0x2e,
+        "KeyV" => 0x2f,
+        "KeyB" => 0x30,
+        "KeyN" => 0x31,
+        "KeyM" => 0x32,
+        "Comma" => 0x33,
+        "Period" => 0x34,
+        "Slash" => 0x35,
+        "Space" => 0x39,
+        "F1" => 0x3b,
+        "F2" => 0x3c,
+        "F3" => 0x3d,
+        "F4" => 0x3e,
+        "F5" => 0x3f,
+        "F6" => 0x40,
+        "F7" => 0x41,
+        "F8" => 0x42,
+        "F9" => 0x43,
+        "F10" => 0x44,
+        "F11" => 0x57,
+        "F12" => 0x58,
+        "Home" => 0xe047,
+        "ArrowUp" => 0xe048,
+        "PageUp" => 0xe049,
+        "ArrowLeft" => 0xe04b,
+        "ArrowRight" => 0xe04d,
+        "End" => 0xe04f,
+        "ArrowDown" => 0xe050,
+        "PageDown" => 0xe051,
+        "Insert" => 0xe052,
+        "Delete" => 0xe053,
+        _ => return None,
+    })
+}
+
+fn validate_application(path: &str) -> Result<(), String> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute()
+        || !path.is_file()
+        || !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        return Err("Choose an existing application with an absolute .exe path.".into());
+    }
+    Ok(())
+}
+
+pub fn validate_action(action: &Action) -> Result<(), String> {
+    match action {
+        Action::LaunchApplication { path } => validate_application(path),
+        Action::Minimize | Action::Maximize => Ok(()),
+        _ => shortcut(action).map(|_| ()),
+    }
+}
+
+pub fn pick_application() -> Result<Option<String>, String> {
+    use std::os::windows::process::CommandExt;
+    // The script is fixed; the selected path is data and is never interpolated into PowerShell.
+    let script = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = 'Choose an application'; $dialog.Filter = 'Applications (*.exe)|*.exe'; if ($dialog.ShowDialog() -eq 'OK') { [Console]::Write($dialog.FileName) }";
+    let powershell = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .ok_or("Windows system directory is unavailable.")?
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let output = std::process::Command::new(powershell)
+        .args(["-NoProfile", "-STA", "-NonInteractive", "-Command", script])
+        .creation_flags(0x08000000)
+        .output()
+        .map_err(|e| format!("Could not open application picker: {e}"))?;
+    if !output.status.success() {
+        return Err("Application picker failed.".into());
+    }
+    let path = String::from_utf8(output.stdout)
+        .map_err(|_| "Application picker returned invalid text.")?;
+    if path.is_empty() {
+        return Ok(None);
+    }
+    validate_application(&path)?;
+    Ok(Some(path))
 }
 
 fn key_input(key: u16, up: bool) -> INPUT {
@@ -264,7 +477,26 @@ fn key_input(key: u16, up: bool) -> INPUT {
             ki: KEYBDINPUT {
                 wVk: key,
                 wScan: 0,
-                dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                dwFlags: if up { KEYEVENTF_KEYUP } else { 0 }
+                    | if matches!(
+                        key,
+                        VK_LEFT
+                            | VK_RIGHT
+                            | VK_UP
+                            | VK_DOWN
+                            | VK_HOME
+                            | VK_END
+                            | VK_PRIOR
+                            | VK_NEXT
+                            | VK_INSERT
+                            | VK_DELETE
+                            | VK_LWIN
+                            | VK_RWIN
+                    ) {
+                        KEYEVENTF_EXTENDEDKEY
+                    } else {
+                        0
+                    },
                 time: 0,
                 dwExtraInfo: INJECTED_TAG,
             },
@@ -272,21 +504,123 @@ fn key_input(key: u16, up: bool) -> INPUT {
     }
 }
 
+fn shortcut_inputs(keys: &[u16], scan: Option<u16>, up: bool) -> Vec<INPUT> {
+    let mut inputs: Vec<_> = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            if let Some(scan) = scan.filter(|_| index + 1 == keys.len()) {
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: 0,
+                            wScan: scan & 0xff,
+                            dwFlags: KEYEVENTF_SCANCODE
+                                | if scan & 0xff00 == 0xe000 {
+                                    KEYEVENTF_EXTENDEDKEY
+                                } else {
+                                    0
+                                }
+                                | if up { KEYEVENTF_KEYUP } else { 0 },
+                            time: 0,
+                            dwExtraInfo: INJECTED_TAG,
+                        },
+                    },
+                }
+            } else {
+                key_input(*key, up)
+            }
+        })
+        .collect();
+    if up {
+        inputs.reverse();
+    }
+    inputs
+}
+
 fn perform(action: Action) -> Result<(), String> {
-    let keys = shortcut(action);
+    if let Action::LaunchApplication { path } = action {
+        // Filesystem validation and process creation can block; never delay the mouse hook.
+        return thread::Builder::new()
+            .name("qz-launch".into())
+            .spawn(move || {
+                let result = validate_application(&path).and_then(|_| {
+                    std::process::Command::new(&path)
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| format!("Could not launch application: {e}"))
+                });
+                if let (Err(error), Some(shared)) = (result, SHARED.get()) {
+                    shared
+                        .engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .error = Some(error);
+                }
+            })
+            .map(|_| ())
+            .map_err(|e| format!("Could not schedule application launch: {e}"));
+    }
+    validate_action(&action)?;
+    let keys = match &action {
+        Action::Disable => return Ok(()),
+        Action::Default => return Err("Default actions must pass through unchanged.".into()),
+        Action::Minimize | Action::Maximize => {
+            unsafe {
+                let window = GetForegroundWindow();
+                if window.is_null() {
+                    return Err("No foreground window is available.".into());
+                }
+                if ShowWindowAsync(
+                    window,
+                    if action == Action::Minimize {
+                        SW_MINIMIZE
+                    } else if IsZoomed(window) != 0 {
+                        SW_RESTORE
+                    } else {
+                        SW_MAXIMIZE
+                    },
+                ) == 0
+                {
+                    return Err("Windows could not change the foreground window.".into());
+                }
+            }
+            return Ok(());
+        }
+        _ => shortcut(&action)?,
+    };
+    let scan = if let Action::CustomShortcut { key, .. } = &action {
+        Some(custom_scan(key).ok_or("This physical shortcut key is unsupported.")?)
+    } else {
+        None
+    };
     unsafe {
+        let mut held_keys = keys.clone();
+        if let Some(scan) = scan {
+            let foreground_thread = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+            let key = MapVirtualKeyExW(
+                scan as u32,
+                MAPVK_VSC_TO_VK_EX,
+                GetKeyboardLayout(foreground_thread),
+            );
+            if key == 0 {
+                return Err("The active keyboard layout does not support this key.".into());
+            }
+            *held_keys.last_mut().ok_or("The shortcut has no key.")? = key as u16;
+        }
         // Never release a modifier that the person is physically holding.
         if [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN]
             .iter()
-            .chain(keys.iter())
+            .chain(held_keys.iter())
             .any(|key| GetAsyncKeyState(*key as i32) < 0)
         {
             return Err(
                 "Release Ctrl, Alt, Shift and Windows keys before using a mapped button.".into(),
             );
         }
-        let mut inputs: Vec<_> = keys.iter().map(|key| key_input(*key, false)).collect();
-        inputs.extend(keys.iter().rev().map(|key| key_input(*key, true)));
+        let mut inputs = shortcut_inputs(&keys, scan, false);
+        inputs.extend(shortcut_inputs(&keys, scan, true));
         let sent = SendInput(
             inputs.len() as u32,
             inputs.as_ptr(),
@@ -294,7 +628,7 @@ fn perform(action: Action) -> Result<(), String> {
         );
         if sent != inputs.len() as u32 {
             if sent > 0 {
-                let releases: Vec<_> = keys.iter().rev().map(|key| key_input(*key, true)).collect();
+                let releases = shortcut_inputs(&keys, scan, true);
                 SendInput(
                     releases.len() as u32,
                     releases.as_ptr(),
@@ -322,8 +656,105 @@ mod tests {
     }
     #[test]
     fn copy_and_paste_use_control_and_distinct_keys() {
-        assert_eq!(shortcut(Action::Copy), vec![VK_CONTROL, b'C' as u16]);
-        assert_eq!(shortcut(Action::Paste), vec![VK_CONTROL, b'V' as u16]);
-        assert!(shortcut(Action::Default).is_empty());
+        assert_eq!(
+            shortcut(&Action::Copy).unwrap(),
+            vec![VK_CONTROL, b'C' as u16]
+        );
+        assert_eq!(
+            shortcut(&Action::Paste).unwrap(),
+            vec![VK_CONTROL, b'V' as u16]
+        );
+        assert!(shortcut(&Action::Default).unwrap().is_empty());
+    }
+    #[test]
+    fn custom_shortcuts_validate_keys_and_modifiers() {
+        assert_eq!(
+            shortcut(&Action::CustomShortcut {
+                key: "KeyK".into(),
+                modifiers: vec!["control".into(), "shift".into()]
+            })
+            .unwrap(),
+            vec![VK_CONTROL, VK_SHIFT, b'K' as u16]
+        );
+        for key in ["Keya", "F13", "F01", "Shell", ""] {
+            assert!(custom_key(key).is_none());
+        }
+        for key in ["KeyZ", "Digit0", "F12", "Insert", "Slash"] {
+            assert!(custom_key(key).is_some());
+        }
+        assert!(validate_action(&Action::CustomShortcut {
+            key: "KeyK".into(),
+            modifiers: vec!["control".into(), "control".into()]
+        })
+        .is_err());
+        assert!(validate_action(&Action::CustomShortcut {
+            key: "KeyK".into(),
+            modifiers: vec!["shell".into()]
+        })
+        .is_err());
+        assert!(validate_application("calc.exe").is_err());
+        assert!(validate_application(r"C:\Windows\System32\cmd.exe /c echo bad").is_err());
+        assert!(validate_application(std::env::current_exe().unwrap().to_str().unwrap()).is_ok());
+    }
+    #[test]
+    fn desktop_media_and_tab_actions_use_distinct_native_keys() {
+        assert_eq!(
+            shortcut(&Action::PreviousDesktop).unwrap(),
+            vec![VK_CONTROL, VK_LWIN, VK_LEFT]
+        );
+        assert_eq!(
+            shortcut(&Action::NextDesktop).unwrap(),
+            vec![VK_CONTROL, VK_LWIN, VK_RIGHT]
+        );
+        assert_eq!(
+            shortcut(&Action::PreviousTab).unwrap(),
+            vec![VK_CONTROL, VK_SHIFT, VK_TAB]
+        );
+        assert_eq!(
+            shortcut(&Action::NextTab).unwrap(),
+            vec![VK_CONTROL, VK_TAB]
+        );
+        assert_eq!(
+            shortcut(&Action::PlayPause).unwrap(),
+            vec![VK_MEDIA_PLAY_PAUSE]
+        );
+        assert_eq!(shortcut(&Action::Mute).unwrap(), vec![VK_VOLUME_MUTE]);
+        assert!(shortcut(&Action::Disable).unwrap().is_empty());
+        assert!(shortcut(&Action::Minimize).is_err());
+        assert!(validate_action(&Action::Minimize).is_ok());
+        for letter in b'A'..=b'Z' {
+            assert_eq!(
+                custom_key(&format!("Key{}", letter as char)),
+                Some(letter as u16)
+            );
+        }
+    }
+    #[test]
+    fn custom_physical_keys_pair_scan_code_presses_and_releases() {
+        assert_eq!(custom_scan("KeyY"), Some(0x15));
+        assert_eq!(custom_scan("KeyZ"), Some(0x2c));
+        assert_eq!(custom_scan("Semicolon"), Some(0x27));
+        assert_eq!(custom_scan("Slash"), Some(0x35));
+        assert_eq!(custom_scan("ArrowLeft"), Some(0xe04b));
+        assert!(custom_scan("NumpadEnter").is_none());
+        let keys = [VK_CONTROL, VK_LEFT];
+        let down = shortcut_inputs(&keys, Some(0xe04b), false);
+        let up = shortcut_inputs(&keys, Some(0xe04b), true);
+        unsafe {
+            assert_eq!(down[0].Anonymous.ki.wVk, VK_CONTROL);
+            assert_eq!(down[1].Anonymous.ki.wVk, 0);
+            assert_eq!(down[1].Anonymous.ki.wScan, 0x4b);
+            assert_eq!(
+                down[1].Anonymous.ki.dwFlags,
+                KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY
+            );
+            assert_eq!(up[0].Anonymous.ki.wScan, 0x4b);
+            assert_eq!(
+                up[0].Anonymous.ki.dwFlags,
+                KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+            );
+            assert_eq!(up[1].Anonymous.ki.wVk, VK_CONTROL);
+            assert_eq!(up[1].Anonymous.ki.dwFlags, KEYEVENTF_KEYUP);
+        }
     }
 }

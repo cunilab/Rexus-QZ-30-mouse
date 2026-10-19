@@ -63,6 +63,7 @@ extern "C" {
     fn CGPreflightPostEventAccess() -> bool;
     fn CGEventGetIntegerValueField(event: Event, field: u32) -> i64;
     fn CGEventSourceFlagsState(state: i32) -> u64;
+    fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     fn CGEventCreateKeyboardEvent(source: Ref, key: u16, down: bool) -> Event;
     fn CGEventSetFlags(event: Event, flags: u64);
     fn CGEventPost(tap: u32, event: Event);
@@ -298,9 +299,10 @@ unsafe extern "C" fn callback(_proxy: Event, kind: u32, event: Event, _data: *mu
     event
 }
 
-fn shortcut(action: Action) -> (u16, u64) {
-    match action {
+fn shortcut(action: &Action) -> Result<(u16, u64), String> {
+    Ok(match action {
         Action::Copy => (8, COMMAND),
+        Action::Cut => (7, COMMAND),
         Action::Paste => (9, COMMAND),
         Action::Undo => (6, COMMAND),
         Action::Redo => (6, COMMAND | SHIFT),
@@ -309,13 +311,213 @@ fn shortcut(action: Action) -> (u16, u64) {
         Action::BrowserBack => (33, COMMAND),
         Action::BrowserForward => (30, COMMAND),
         Action::TaskView => (126, CONTROL),
-        Action::VolumeUp | Action::VolumeDown => (0, 0),
-        Action::Default => (0, 0),
+        Action::PreviousDesktop => (123, CONTROL),
+        Action::NextDesktop => (124, CONTROL),
+        Action::SwitchApps => (48, COMMAND),
+        Action::Minimize => (46, COMMAND),
+        Action::Maximize => (3, CONTROL | COMMAND), // macOS full screen.
+        Action::PreviousTab => (48, CONTROL | SHIFT),
+        Action::NextTab => (48, CONTROL),
+        Action::NewTab => (17, COMMAND),
+        Action::CloseTab => (13, COMMAND),
+        Action::ReopenTab => (17, COMMAND | SHIFT),
+        Action::Refresh => (15, COMMAND),
+        Action::ZoomIn => (24, COMMAND),
+        Action::ZoomOut => (27, COMMAND),
+        Action::ZoomReset => (29, COMMAND),
+        Action::Screenshot => (20, COMMAND | SHIFT),
+        Action::Default | Action::Disable => (0, 0),
+        Action::CustomShortcut { key, modifiers } => {
+            let mut flags = 0;
+            for modifier in modifiers {
+                let flag = match modifier.as_str() {
+                    "control" => CONTROL,
+                    "alt" => OPTION,
+                    "shift" => SHIFT,
+                    "meta" => COMMAND,
+                    _ => return Err(format!("Unknown shortcut modifier: {modifier}")),
+                };
+                if flags & flag != 0 {
+                    return Err("Shortcut modifiers must be unique.".into());
+                }
+                flags |= flag;
+            }
+            (
+                custom_key(key)
+                    .ok_or_else(|| format!("Unsupported shortcut key on macOS: {key}"))?,
+                flags,
+            )
+        }
+        Action::VolumeUp
+        | Action::VolumeDown
+        | Action::Mute
+        | Action::PlayPause
+        | Action::PreviousTrack
+        | Action::NextTrack
+        | Action::LaunchApplication { .. } => {
+            return Err("This action does not use a keyboard shortcut.".into());
+        }
+    })
+}
+
+fn custom_key(key: &str) -> Option<u16> {
+    Some(match key {
+        "KeyA" => 0,
+        "KeyS" => 1,
+        "KeyD" => 2,
+        "KeyF" => 3,
+        "KeyH" => 4,
+        "KeyG" => 5,
+        "KeyZ" => 6,
+        "KeyX" => 7,
+        "KeyC" => 8,
+        "KeyV" => 9,
+        "KeyB" => 11,
+        "KeyQ" => 12,
+        "KeyW" => 13,
+        "KeyE" => 14,
+        "KeyR" => 15,
+        "KeyY" => 16,
+        "KeyT" => 17,
+        "KeyO" => 31,
+        "KeyU" => 32,
+        "KeyI" => 34,
+        "KeyP" => 35,
+        "KeyL" => 37,
+        "KeyJ" => 38,
+        "KeyK" => 40,
+        "KeyN" => 45,
+        "KeyM" => 46,
+        "Digit1" => 18,
+        "Digit2" => 19,
+        "Digit3" => 20,
+        "Digit4" => 21,
+        "Digit6" => 22,
+        "Digit5" => 23,
+        "Digit9" => 25,
+        "Digit7" => 26,
+        "Digit8" => 28,
+        "Digit0" => 29,
+        "F1" => 122,
+        "F2" => 120,
+        "F3" => 99,
+        "F4" => 118,
+        "F5" => 96,
+        "F6" => 97,
+        "F7" => 98,
+        "F8" => 100,
+        "F9" => 101,
+        "F10" => 109,
+        "F11" => 103,
+        "F12" => 111,
+        "ArrowLeft" => 123,
+        "ArrowRight" => 124,
+        "ArrowDown" => 125,
+        "ArrowUp" => 126,
+        "Space" => 49,
+        "Enter" => 36,
+        "Escape" => 53,
+        "Tab" => 48,
+        "Backspace" => 51,
+        "Delete" => 117,
+        "Home" => 115,
+        "End" => 119,
+        "PageUp" => 116,
+        "PageDown" => 121,
+        "Equal" => 24,
+        "Minus" => 27,
+        "BracketRight" => 30,
+        "BracketLeft" => 33,
+        "Quote" => 39,
+        "Semicolon" => 41,
+        "Backslash" => 42,
+        "Comma" => 43,
+        "Slash" => 44,
+        "Period" => 47,
+        "Backquote" => 50,
+        _ => return None,
+    })
+}
+
+fn validate_application(path: &str) -> Result<(), String> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute()
+        || !path.is_dir()
+        || path.extension().is_none_or(|extension| extension != "app")
+        || !path.join("Contents/Info.plist").is_file()
+    {
+        return Err("Choose an existing application with an absolute .app path.".into());
+    }
+    Ok(())
+}
+
+pub fn validate_action(action: &Action) -> Result<(), String> {
+    match action {
+        Action::LaunchApplication { path } => validate_application(path),
+        Action::VolumeUp
+        | Action::VolumeDown
+        | Action::Mute
+        | Action::PlayPause
+        | Action::PreviousTrack
+        | Action::NextTrack => Ok(()),
+        _ => shortcut(action).map(|_| ()),
     }
 }
 
+pub fn pick_application() -> Result<Option<String>, String> {
+    // No user-controlled text enters AppleScript; paths return on stdout as data.
+    let script = "try\nset selectedApp to choose application with prompt \"Choose an application\" as alias\nreturn POSIX path of selectedApp\non error number -128\nreturn \"\"\nend try";
+    let output = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", script])
+        .output()
+        .map_err(|e| format!("Could not open application picker: {e}"))?;
+    if !output.status.success() {
+        return Err("Application picker failed.".into());
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| "Application picker returned invalid text.")?;
+    let path = text.strip_suffix('\n').unwrap_or(&text);
+    let path = path.strip_suffix('/').unwrap_or(path);
+    if path.is_empty() {
+        return Ok(None);
+    }
+    validate_application(path)?;
+    Ok(Some(path.into()))
+}
+
 fn perform(action: Action) -> Result<(), String> {
-    let (key, flags) = shortcut(action);
+    if let Action::LaunchApplication { path } = action {
+        // Filesystem validation and Launch Services can block; keep them off the event tap.
+        return thread::Builder::new()
+            .name("qz-launch".into())
+            .spawn(move || {
+                let result = validate_application(&path).and_then(|_| {
+                    std::process::Command::new("/usr/bin/open")
+                        .args(["-a", &path])
+                        .status()
+                        .map_err(|e| format!("Could not launch application: {e}"))?
+                        .success()
+                        .then_some(())
+                        .ok_or_else(|| "macOS could not open the selected application.".into())
+                });
+                if let (Err(error), Some(shared)) = (result, SHARED.get()) {
+                    shared
+                        .engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .error = Some(error);
+                }
+            })
+            .map(|_| ())
+            .map_err(|e| format!("Could not schedule application launch: {e}"));
+    }
+    validate_action(&action)?;
+    if action == Action::Disable {
+        return Ok(());
+    }
+    if action == Action::Default {
+        return Err("Default actions must pass through unchanged.".into());
+    }
     unsafe {
         if !CGPreflightPostEventAccess() {
             return Err(
@@ -328,8 +530,12 @@ fn perform(action: Action) -> Result<(), String> {
                 "Release Command, Control, Option and Shift before using a mapped button.".into(),
             );
         }
-        if matches!(action, Action::VolumeUp | Action::VolumeDown) {
-            return media_volume(action == Action::VolumeUp);
+        if let Some(key) = media_key(&action) {
+            return objc2::rc::autoreleasepool(|_| media_key_event(key));
+        }
+        let (key, flags) = shortcut(&action)?;
+        if CGEventSourceKeyState(1, key) {
+            return Err("Release the shortcut key before using its mapped button.".into());
         }
         let down = CGEventCreateKeyboardEvent(null(), key, true);
         let up = CGEventCreateKeyboardEvent(null(), key, false);
@@ -352,22 +558,29 @@ fn perform(action: Action) -> Result<(), String> {
     Ok(())
 }
 
-fn media_volume(up: bool) -> Result<(), String> {
-    objc2::rc::autoreleasepool(|_| media_volume_event(up))
+fn media_key(action: &Action) -> Option<isize> {
+    match action {
+        Action::VolumeUp => Some(0),
+        Action::VolumeDown => Some(1),
+        Action::Mute => Some(7),
+        Action::PlayPause => Some(16),
+        Action::NextTrack => Some(17),
+        Action::PreviousTrack => Some(18),
+        _ => None,
+    }
 }
 
-fn media_volume_event(up: bool) -> Result<(), String> {
+fn media_key_event(key: isize) -> Result<(), String> {
     use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
     use objc2_foundation::NSPoint;
-    let key: isize = if up { 0 } else { 1 };
     let create = |state: isize| {
         NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
             NSEventType::SystemDefined, NSPoint::new(0.0, 0.0), NSEventModifierFlags::empty(),
             0.0, 0, None, 8, (key << 16) | state, -1,
         ).and_then(|event| event.CGEvent())
     };
-    let down = create(0x0a00).ok_or("macOS could not create volume key press.")?;
-    let up = create(0x0b00).ok_or("macOS could not create volume key release.")?;
+    let down = create(0x0a00).ok_or("macOS could not create media key press.")?;
+    let up = create(0x0b00).ok_or("macOS could not create media key release.")?;
     unsafe {
         CGEventPost(0, (&*down as *const _ as *mut c_void).cast());
         CGEventPost(0, (&*up as *const _ as *mut c_void).cast());
@@ -380,8 +593,51 @@ mod tests {
     use super::*;
     #[test]
     fn shortcuts_use_command_and_redo_adds_shift() {
-        assert_eq!(shortcut(Action::Copy), (8, COMMAND));
-        assert_eq!(shortcut(Action::Paste), (9, COMMAND));
-        assert_eq!(shortcut(Action::Redo), (6, COMMAND | SHIFT));
+        assert_eq!(shortcut(&Action::Copy).unwrap(), (8, COMMAND));
+        assert_eq!(shortcut(&Action::Paste).unwrap(), (9, COMMAND));
+        assert_eq!(shortcut(&Action::Redo).unwrap(), (6, COMMAND | SHIFT));
+        assert_eq!(shortcut(&Action::Maximize).unwrap(), (3, CONTROL | COMMAND));
+    }
+    #[test]
+    fn custom_shortcuts_and_media_keys_are_explicit() {
+        assert_eq!(
+            shortcut(&Action::CustomShortcut {
+                key: "KeyK".into(),
+                modifiers: vec!["meta".into(), "shift".into()]
+            })
+            .unwrap(),
+            (40, COMMAND | SHIFT)
+        );
+        for key in ["Insert", "Keya", "F13", "F01", "Shell", ""] {
+            assert!(custom_key(key).is_none());
+        }
+        for key in ["KeyZ", "Digit0", "F12", "Delete", "Slash"] {
+            assert!(custom_key(key).is_some());
+        }
+        assert!(validate_action(&Action::CustomShortcut {
+            key: "KeyK".into(),
+            modifiers: vec!["meta".into(), "meta".into()]
+        })
+        .is_err());
+        assert!(validate_action(&Action::CustomShortcut {
+            key: "KeyK".into(),
+            modifiers: vec!["shell".into()]
+        })
+        .is_err());
+        assert_eq!(media_key(&Action::Mute), Some(7));
+        assert_eq!(media_key(&Action::PlayPause), Some(16));
+        assert_eq!(media_key(&Action::PreviousTrack), Some(18));
+        assert!(validate_application("Safari.app").is_err());
+        assert!(validate_application("/Applications/Safari.app --args -c bad").is_err());
+        assert_eq!(shortcut(&Action::PreviousDesktop).unwrap(), (123, CONTROL));
+        assert_eq!(shortcut(&Action::NextDesktop).unwrap(), (124, CONTROL));
+        assert_eq!(
+            shortcut(&Action::PreviousTab).unwrap(),
+            (48, CONTROL | SHIFT)
+        );
+        assert_eq!(shortcut(&Action::NextTab).unwrap(), (48, CONTROL));
+        for letter in b'A'..=b'Z' {
+            assert!(custom_key(&format!("Key{}", letter as char)).is_some());
+        }
     }
 }

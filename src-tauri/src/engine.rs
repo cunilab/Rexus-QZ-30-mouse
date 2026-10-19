@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     #[default]
     Default,
@@ -16,6 +16,102 @@ pub enum Action {
     TaskView,
     VolumeUp,
     VolumeDown,
+    Disable,
+    Cut,
+    PreviousDesktop,
+    NextDesktop,
+    SwitchApps,
+    Minimize,
+    Maximize,
+    PreviousTab,
+    NextTab,
+    NewTab,
+    CloseTab,
+    ReopenTab,
+    Refresh,
+    Mute,
+    PlayPause,
+    PreviousTrack,
+    NextTrack,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    Screenshot,
+    CustomShortcut {
+        key: String,
+        modifiers: Vec<String>,
+    },
+    LaunchApplication {
+        path: String,
+    },
+}
+
+impl Action {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::CustomShortcut { key, modifiers } => {
+                let letter = key
+                    .strip_prefix("Key")
+                    .is_some_and(|key| key.len() == 1 && key.as_bytes()[0].is_ascii_uppercase());
+                let digit = key
+                    .strip_prefix("Digit")
+                    .is_some_and(|key| key.len() == 1 && key.as_bytes()[0].is_ascii_digit());
+                let function = key.strip_prefix('F').is_some_and(|key| {
+                    key.parse::<u8>()
+                        .is_ok_and(|number| (1..=12).contains(&number) && key == number.to_string())
+                });
+                let named = [
+                    "ArrowLeft",
+                    "ArrowRight",
+                    "ArrowUp",
+                    "ArrowDown",
+                    "Space",
+                    "Enter",
+                    "Escape",
+                    "Tab",
+                    "Backspace",
+                    "Delete",
+                    "Home",
+                    "End",
+                    "PageUp",
+                    "PageDown",
+                    "Insert",
+                    "Minus",
+                    "Equal",
+                    "BracketLeft",
+                    "BracketRight",
+                    "Backslash",
+                    "Semicolon",
+                    "Quote",
+                    "Comma",
+                    "Period",
+                    "Slash",
+                    "Backquote",
+                ]
+                .contains(&key.as_str());
+                if !(letter || digit || function || named) {
+                    return Err("Choose a supported shortcut key.".into());
+                }
+                if modifiers.len() > 4
+                    || modifiers.iter().enumerate().any(|(index, modifier)| {
+                        !["control", "shift", "alt", "meta"].contains(&modifier.as_str())
+                            || modifiers[..index].contains(modifier)
+                    })
+                {
+                    return Err("Shortcut modifiers must be distinct Control, Shift, Alt/Option, or Windows/Command keys.".into());
+                }
+            }
+            Self::LaunchApplication { path }
+                if path.len() > 4096
+                    || path.contains('\0')
+                    || !std::path::Path::new(path).is_absolute() =>
+            {
+                return Err("Choose an application using an absolute path.".into());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,14 +131,29 @@ impl Mappings {
         self == &Self::default()
     }
 
+    pub fn actions(&self) -> [&Action; 6] {
+        [
+            &self.back,
+            &self.forward,
+            &self.middle,
+            &self.wheel_left,
+            &self.wheel_right,
+            &self.thumb,
+        ]
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.actions().into_iter().try_for_each(Action::validate)
+    }
+
     fn action(&self, input: Input) -> Action {
         match input {
-            Input::Back => self.back,
-            Input::Forward => self.forward,
-            Input::Middle => self.middle,
-            Input::WheelLeft => self.wheel_left,
-            Input::WheelRight => self.wheel_right,
-            Input::Thumb => self.thumb,
+            Input::Back => self.back.clone(),
+            Input::Forward => self.forward.clone(),
+            Input::Middle => self.middle.clone(),
+            Input::WheelLeft => self.wheel_left.clone(),
+            Input::WheelRight => self.wheel_right.clone(),
+            Input::Thumb => self.thumb.clone(),
         }
     }
 }
@@ -180,5 +291,44 @@ mod tests {
         let mappings: Mappings = serde_json::from_str(r#"{"back":"copy","forward":"default","middle":"default","wheel_left":"default","wheel_right":"default"}"#).unwrap();
         assert_eq!(mappings.back, Action::Copy);
         assert_eq!(mappings.thumb, Action::Default);
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    #[test]
+    fn custom_actions_reject_unknown_fields_keys_and_duplicate_modifiers() {
+        for text in [
+            r#"{"custom_shortcut":{"key":"KeyC","modifiers":[],"extra":true}}"#,
+            r#"{"launch_application":{"path":"abc","args":["--unsafe"]}}"#,
+        ] {
+            assert!(serde_json::from_str::<Action>(text).is_err());
+        }
+        for key in ["Keya", "KeyAB", "F0", "F13", "F01", "Unknown"] {
+            assert!(Action::CustomShortcut {
+                key: key.into(),
+                modifiers: vec![]
+            }
+            .validate()
+            .is_err());
+        }
+        for modifiers in [vec!["control", "control"], vec!["unknown"]] {
+            assert!(Action::CustomShortcut {
+                key: "KeyC".into(),
+                modifiers: modifiers.into_iter().map(String::from).collect()
+            }
+            .validate()
+            .is_err());
+        }
+        let action = Action::CustomShortcut {
+            key: "KeyC".into(),
+            modifiers: vec!["control".into()],
+        };
+        action.validate().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Action>(&serde_json::to_string(&action).unwrap()).unwrap(),
+            action
+        );
     }
 }

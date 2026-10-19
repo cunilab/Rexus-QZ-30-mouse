@@ -25,7 +25,7 @@
       <section class="device-card" aria-labelledby="device-title">
         <div class="card-top"><h2 id="device-title">Your mouse</h2><span class="tiny-label">QZ30</span></div>
         <div class="mouse-stage">
-          <div class="mouse-render"><img class="mouse-art" src="assets/qz30.png" alt="QZ30 Black mouse" width="1000" height="1000"><span class="mouse-marker marker-back" aria-hidden="true">2</span><span class="mouse-marker marker-forward" aria-hidden="true">3</span><span class="mouse-marker marker-middle" aria-hidden="true">1</span><span class="mouse-marker marker-thumb" aria-hidden="true">4</span><span class="mouse-marker marker-side-up" aria-hidden="true">↑</span><span class="mouse-marker marker-side-down" aria-hidden="true">↓</span></div>
+          <div class="mouse-render"><img class="mouse-art" src="assets/qz30.png" alt="QZ30 Black mouse" width="1000" height="1000"><button id="marker-back" class="mouse-marker marker-back" type="button" aria-label="Edit Back button" aria-controls="mapping-back" aria-pressed="false">2</button><button id="marker-forward" class="mouse-marker marker-forward" type="button" aria-label="Edit Forward button" aria-controls="mapping-forward" aria-pressed="false">3</button><button id="marker-middle" class="mouse-marker marker-middle" type="button" aria-label="Edit Middle click" aria-controls="mapping-middle" aria-pressed="false">1</button><button id="marker-thumb" class="mouse-marker marker-thumb" type="button" aria-label="Edit Thumb-rest button" aria-controls="mapping-thumb" aria-pressed="false">4</button><button id="marker-wheel_right" class="mouse-marker marker-side-up" type="button" aria-label="Edit Side wheel up" aria-controls="mapping-wheel_right" aria-pressed="false">↑</button><button id="marker-wheel_left" class="mouse-marker marker-side-down" type="button" aria-label="Edit Side wheel down" aria-controls="mapping-wheel_left" aria-pressed="false">↓</button></div>
           <span class="stage-caption">QZ30 BLACK</span>
         </div>
         <div class="receiver"><span id="receiver-dot" class="status-dot"></span><div><strong id="receiver-status">Checking receiver…</strong><p id="receiver-detail">Looking for a compatible USB receiver.</p></div></div>
@@ -35,6 +35,28 @@
       <section class="mapping-card" aria-labelledby="mapping-title">
         <div class="card-top"><div><h2 id="mapping-title">Button assignments</h2><p>Less reaching. More doing.</p></div><span id="draft-state" class="draft-state">Saved locally</span></div>
         <div id="mapping-rows" class="mapping-rows"></div>
+        <section class="action-editor" aria-labelledby="editor-title">
+          <h3 id="editor-title">Middle click action</h3>
+          <p id="editor-hint">Select a mouse marker or button row to edit.</p>
+          <fieldset id="shortcut-editor" hidden>
+            <legend>Custom keyboard shortcut</legend>
+            <label class="key-option" for="shortcut-key">Key <select id="shortcut-key"></select></label>
+            <div class="modifier-options">
+              <label><input id="modifier-control" type="checkbox"> Control</label>
+              <label><input id="modifier-shift" type="checkbox"> Shift</label>
+              <label><input id="modifier-alt" type="checkbox"> Alt / Option</label>
+              <label><input id="modifier-meta" type="checkbox"> Windows / Command</label>
+            </div>
+            <button id="record-shortcut" type="button" class="button secondary" aria-describedby="editor-hint">Record shortcut</button>
+            <p>Record a shortcut, or choose its key and modifiers above. Escape cancels recording. Finish or cancel recording before saving. System-reserved shortcuts may not be recordable.</p>
+          </fieldset>
+          <fieldset id="application-editor" hidden>
+            <legend>Launch application</legend>
+            <label for="application-path">Selected application</label>
+            <input id="application-path" type="text" readonly placeholder="No application selected">
+            <button id="pick-application" type="button" class="button secondary">Choose application</button>
+          </fieldset>
+        </section>
         <p class="wheel-note">Side wheel and button 4 use receiver input on Windows. macOS currently supports OS scroll events; button 4 is unavailable there.</p>
         <div class="mapping-actions"><button id="reset" class="button secondary" type="button">Reset to defaults</button><button id="save" class="button primary" type="button" disabled>Save and apply</button></div>
         <div class="mapping-status-area"><h3 id="mapping-status" role="status" aria-live="polite">Checking mappings...</h3><p id="mapping-detail">Reading saved assignments.</p><p class="scope-notice">Active mappings apply to all mice and trackpads on this computer. Close the original mouse utility first. Pause or Resume from the tray or menu bar.</p><button id="permission" class="text-button" type="button" hidden>Open macOS input permissions</button></div>

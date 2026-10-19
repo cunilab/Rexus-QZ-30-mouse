@@ -1,5 +1,13 @@
 # Validation — first desktop slice
 
+## Milestone 3 ? 0.1.1-beta.4
+
+- Local Windows checks: 32 Node tests and 44 Rust tests passed, with version consistency, formatting and Clippy warnings denied. Optimized native build is checked separately from physical input execution.
+- Added coverage for structured action validation, version 1 migration/backups, raw-receiver Disable rejection, physical scan-code mapping/extended releases, recorder cancellation/drain, deep draft isolation, native editor cancellation, and mapped-input bypass during recording.
+- Independent cross-scope review verified launch paths remain data, application work runs outside input callbacks, and recording guard cleanup preserves consumed releases. Focus and held-key findings were fixed and reviewed.
+- Hosted Windows/Mac checks and physical OS configuration are separate gates. Native recording, dialogs, app launches, window actions and non-US layouts still require user verification; secure OS shortcuts cannot be guaranteed captured.
+
+
 ## Milestone 2 ? 0.1.1-beta.3
 
 - Local Windows validation: 24 Node tests, 32 Rust tests, formatting, Clippy with warnings denied, version consistency, and optimized Tauri build passed.

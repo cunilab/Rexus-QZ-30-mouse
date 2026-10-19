@@ -18,7 +18,9 @@ Saved assignments restore automatically after prerequisite checks. Receiver loss
 
 Active mappings apply to **all mice and trackpads on this computer**, not exclusively the QZ30. A receiver being present does not prove that the mouse is powered on, and its USB ID is shared by several OEM models.
 
-Actions: default behavior, copy, paste, undo, redo, select all, show desktop, Task View / Mission Control, volume up/down, browser back and forward. Primary left/right click and vertical scrolling are left alone. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS currently requires horizontal OS scroll events and has no thumb-rest support. Remapped buttons behave as one-shot shortcuts, not held keys or drag controls. Holding a keyboard modifier bypasses the mapping to avoid releasing keys you are holding.
+Actions are grouped into Mouse, Editing, Desktop and windows, Browser and tabs, Media, Zoom and capture, and Custom. Click a mouse marker to select its editor. Custom shortcuts can be selected manually or recorded while QZ Flow has focus; application assignments use a native picker. Save and apply activates the draft. See [action behavior and verification](docs/ACTIONS.md).
+
+Primary left/right click and vertical scrolling are left alone. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS requires horizontal OS scroll events and has no thumb-rest support. Disable is unavailable for Windows raw receiver wheel/thumb inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
 
 ## Build and run
 
@@ -56,7 +58,7 @@ The first enumerates compatible receiver interfaces. The second also creates and
 
 ## Settings and implementation
 
-Assignments are stored in Tauri's per-user configuration directory under `dev.qzflow.desktop/mappings.json`. Windows normally uses `%APPDATA%`; macOS uses `~/Library/Application Support`. Saves use a staged file and atomic rename. The version 1 envelope stores assignments and an explicit Pause preference. Legacy assignments load unchanged. Before replacing a legacy, corrupt, or unsupported file, an exact sibling `.mappings.json-*.backup` is retained; failed backup or replacement leaves the original file intact.
+Assignments are stored in Tauri's per-user configuration directory under `dev.qzflow.desktop/mappings.json`. Windows normally uses `%APPDATA%`; macOS uses `~/Library/Application Support`. Saves use a staged file and atomic rename. The version 2 envelope stores assignments and an explicit Pause preference. Legacy and version 1 assignments load unchanged. Before replacing a legacy, corrupt, or unsupported file, an exact sibling `.mappings.json-*.backup` is retained; failed backup or replacement leaves the original file intact.
 
 For recovery or downgrade, Quit QZ Flow, copy the current file somewhere safe, then copy the chosen backup to `mappings.json`. Legacy backups work with the older app. A malformed file is reported and defaults remain inactive until replaced through a successful Save.
 

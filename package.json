@@ -1,6 +1,6 @@
 {
   "name": "qz-flow",
-  "version": "0.1.1-beta.3",
+  "version": "0.1.1-beta.4",
   "private": true,
   "description": "Independent desktop controls for a Rexus QZ30 Black",
   "scripts": {

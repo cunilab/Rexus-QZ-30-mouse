@@ -7,6 +7,16 @@ use crate::{
 use std::sync::atomic::Ordering;
 
 fn validate(mappings: &Mappings) -> Result<(), String> {
+    mappings.validate()?;
+    if cfg!(windows)
+        && [&mappings.wheel_left, &mappings.wheel_right, &mappings.thumb]
+            .contains(&&crate::Action::Disable)
+    {
+        return Err("Disable is only supported for Middle, Back, and Forward on Windows; raw receiver inputs cannot be reliably suppressed.".into());
+    }
+    for action in mappings.actions() {
+        platform::validate_action(action)?;
+    }
     if !cfg!(windows) && mappings.thumb != crate::Action::Default {
         return Err(
             "Thumb-rest input has not been identified yet; keep button 4 at default.".into(),
@@ -171,9 +181,12 @@ pub fn reconcile(state: &AppState) {
             .engine
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let was_enabled = engine.enabled;
         engine.enabled = !state.shared.stopping.load(Ordering::Acquire)
             && state.shared.hook_running.load(Ordering::Acquire);
-        engine.error = None;
+        if engine.enabled && !was_enabled {
+            engine.error = None;
+        }
     }
 }
 
@@ -192,6 +205,21 @@ mod tests {
             settings_path: "unused.json".into(),
         }
     }
+    #[cfg(windows)]
+    #[test]
+    fn disable_rejects_raw_receiver_inputs_but_accepts_os_buttons() {
+        let mut mappings = Mappings {
+            middle: Action::Disable,
+            ..Mappings::default()
+        };
+        validate(&mappings).unwrap();
+        mappings.wheel_left = Action::Disable;
+        assert!(validate(&mappings).unwrap_err().contains("raw receiver"));
+        mappings.wheel_left = Action::Default;
+        mappings.thumb = Action::Disable;
+        assert!(validate(&mappings).is_err());
+    }
+
     #[test]
     fn failed_preparation_or_save_retains_assignments_and_pause() {
         let state = state();
