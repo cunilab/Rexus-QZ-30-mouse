@@ -1,6 +1,6 @@
 # QZ Flow Roadmap
 
-Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestone 0 infrastructure is implemented; application feature milestones have not started.
+Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0 and 1 are implemented; native lifecycle verification limits are recorded below.
 
 ## Goal
 
@@ -57,13 +57,15 @@ Release path: short-lived branch → PR checks → merge to `main` → version/r
 
 ## Milestone 1 — Background operation and lifecycle
 
-Status: planned.
+Status: implemented in 0.1.1-beta.2; native Windows/Mac GUI and actual login checks remain manual. Unit tests cover startup flag routing, tray-state transitions, shutdown cleanup, startup-setting UI errors, and preservation of mapping drafts. The native Computer Use helper was unavailable, so automated tray-click/login verification is not claimed.
 
-- [ ] Add tray/menu-bar integration with Open, Pause/Resume, and Quit.
-- [ ] Hide on Close; retain normal Minimize behavior.
-- [ ] Add Launch at login, initially off; start hidden when launched at login.
-- [ ] Prevent duplicate running instances; reopening the app reveals the existing window.
-- [ ] Reflect current mapping status in the tray/menu-bar controls.
+- [x] Add tray/menu-bar integration with Open, Pause/Resume, and Quit.
+- [x] Hide on Close; retain normal Minimize behavior.
+- [x] Add Launch at login, initially off; start hidden when launched at login.
+- [x] Prevent duplicate running instances; reopening the app reveals the existing window.
+- [x] Reflect current mapping status in the tray/menu-bar controls.
+
+Startup registration uses the current executable/app location. Keep the app in a permanent installed location before enabling Launch at login; registration starts disabled and is changed only through the user's setting. Windows uses only the current user's startup entry, with quoted paths and command-length validation. Mac uses an XML-safe LaunchAgent file. Milestone 1 starts mappings paused; automatic restoration/activation belongs to Milestone 2. Resume uses the existing receiver, original-utility conflict, and permission checks.
 
 Acceptance:
 

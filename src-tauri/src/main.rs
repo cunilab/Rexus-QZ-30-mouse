@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod engine;
+mod lifecycle;
 mod platform;
+mod startup;
 
 use engine::{Action, Engine, Input, Mappings};
 use serde::Serialize;
@@ -102,6 +104,7 @@ impl Shared {
             last_input: engine.last_input.clone(),
             error: inventory.error.clone().or_else(|| engine.error.clone()),
             thumb_available: cfg!(windows),
+            launch_at_login: None,
         }
     }
 }
@@ -117,6 +120,7 @@ struct Status {
     last_input: Option<String>,
     error: Option<String>,
     thumb_available: bool,
+    launch_at_login: Option<bool>,
 }
 
 struct AppState {
@@ -126,12 +130,48 @@ struct AppState {
 }
 
 #[tauri::command]
-fn get_status(state: tauri::State<AppState>) -> Status {
-    state.shared.status()
+fn get_status(app: tauri::AppHandle, state: tauri::State<AppState>) -> Status {
+    app_status(&app, &state)
+}
+
+fn app_status(app: &tauri::AppHandle, state: &AppState) -> Status {
+    let mut status = state.shared.status();
+    match startup::is_enabled(app) {
+        Ok(enabled) => status.launch_at_login = Some(enabled),
+        Err(error) => {
+            status
+                .error
+                .get_or_insert_with(|| format!("Could not read launch-at-login settings: {error}"));
+        }
+    }
+    status
 }
 
 #[tauri::command]
-fn save_mappings(mappings: Mappings, state: tauri::State<AppState>) -> Result<Status, String> {
+fn set_launch_at_login(
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<Status, String> {
+    let _control = state
+        .control
+        .lock()
+        .map_err(|_| "App control is unavailable. Restart QZ Flow.")?;
+    startup::set_enabled(&app, enabled)
+        .map_err(|error| format!("Could not change launch-at-login settings: {error}"))?;
+    let status = app_status(&app, &state);
+    if status.launch_at_login != Some(enabled) {
+        return Err("The operating system did not confirm the login setting. Try again.".into());
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+fn save_mappings(
+    mappings: Mappings,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<Status, String> {
     if !cfg!(windows) && mappings.thumb != Action::Default {
         return Err(
             "Thumb-rest input has not been identified yet; keep button 4 at default.".into(),
@@ -159,11 +199,23 @@ fn save_mappings(mappings: Mappings, state: tauri::State<AppState>) -> Result<St
     engine.mappings = mappings;
     engine.error = None;
     drop(engine);
-    Ok(state.shared.status())
+    drop(_control);
+    lifecycle::sync_tray(&app);
+    Ok(app_status(&app, &state))
 }
 
 #[tauri::command]
-fn set_enabled(enabled: bool, state: tauri::State<AppState>) -> Result<Status, String> {
+fn set_enabled(
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<Status, String> {
+    let result = change_enabled(enabled, &state);
+    lifecycle::sync_tray(&app);
+    result.map(|_| app_status(&app, &state))
+}
+
+fn change_enabled(enabled: bool, state: &AppState) -> Result<(), String> {
     let mut hook = state
         .control
         .lock()
@@ -175,7 +227,7 @@ fn set_enabled(enabled: bool, state: tauri::State<AppState>) -> Result<Status, S
             .lock()
             .map_err(|_| "Mapping state is unavailable.")?
             .enabled = false;
-        return Ok(state.shared.status());
+        return Ok(());
     }
     platform::ensure_no_vendor_utility()?;
     state.shared.refresh();
@@ -218,14 +270,15 @@ fn set_enabled(enabled: bool, state: tauri::State<AppState>) -> Result<Status, S
         if inventory.devices.is_empty() || !state.shared.hook_running.load(Ordering::Acquire) {
             return Err("The receiver or input listener disconnected. Try enabling again.".into());
         }
-        state
+        let mut engine = state
             .shared
             .engine
             .lock()
-            .map_err(|_| "Mapping state is unavailable.")?
-            .enabled = true;
+            .map_err(|_| "Mapping state is unavailable.")?;
+        engine.enabled = true;
+        engine.error = None;
     }
-    Ok(state.shared.status())
+    Ok(())
 }
 
 #[tauri::command]
@@ -287,10 +340,9 @@ fn main() {
         return;
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !lifecycle::login_launch(args) {
+                lifecycle::show(app);
             }
         }))
         .setup(|app| {
@@ -306,23 +358,42 @@ fn main() {
             }
             shared.refresh();
             app.manage(AppState { shared: shared.clone(), control: Mutex::new(None), settings_path });
+            lifecycle::install(app.handle())?;
+            if !lifecycle::login_launch(std::env::args()) {
+                lifecycle::show(app.handle());
+            } else {
+                lifecycle::hide(app.handle())?;
+            }
+            let handle = app.handle().clone();
             thread::spawn(move || {
                 while !shared.stopping.load(Ordering::Acquire) {
                     thread::sleep(Duration::from_secs(2));
+                    if shared.stopping.load(Ordering::Acquire) { break; }
                     shared.refresh();
+                    lifecycle::sync_tray(&handle);
                 }
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_status, save_mappings, set_enabled, open_input_settings])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if let Err(error) = lifecycle::hide(window.app_handle()) {
+                    let state = window.state::<AppState>();
+                    state.shared.engine.lock().unwrap_or_else(|e| e.into_inner()).error = Some(format!("Could not hide QZ Flow: {error}"));
+                    lifecycle::show(window.app_handle());
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![get_status, save_mappings, set_enabled, open_input_settings, set_launch_at_login])
         .build(tauri::generate_context!())
         .expect("Could not start QZ Flow")
         .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                let state = app.state::<AppState>();
-                state.shared.stopping.store(true, Ordering::Release);
-                state.shared.engine.lock().unwrap_or_else(|e| e.into_inner()).enabled = false;
-                state.control.lock().unwrap_or_else(|e| e.into_inner()).take();
+            match event {
+                tauri::RunEvent::Exit => lifecycle::stop(app),
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => lifecycle::show(app),
+                _ => {}
             }
         });
 }
