@@ -1,6 +1,6 @@
 # QZ Flow Roadmap
 
-Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestone 0 implementation is underway; application feature milestones have not started.
+Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestone 0 infrastructure is implemented; application feature milestones have not started.
 
 ## Goal
 
@@ -20,7 +20,7 @@ Make QZ Flow a convenient daily mouse utility for Rexus QZ30 Black on Windows an
 
 ## Milestone 0 — Trunk-based Git and release foundation
 
-Status: infrastructure implemented; hosted checks and prerelease packaging are being verified. A tagged release is produced only when its platform checks and release gates pass.
+Status: implemented. [PR #1](https://github.com/cunilab/Rexus-QZ-30-mouse/pull/1) passed required Windows/Mac checks and merged through the protected trunk. [Beta release verification](https://github.com/cunilab/Rexus-QZ-30-mouse/actions/runs/39235833219) records exact-tag checks and packaging results. A draft is created only when its platform checks and artifact gates pass; manual publication and installed-app validation remain separate release gates.
 
 Development workflow:
 
@@ -35,11 +35,11 @@ GitHub Actions:
 - [x] Extend existing `.github/workflows/check.yml` for PRs and `main`: formatting, UI/Rust tests, Clippy, version consistency, and Windows/Mac build checks.
 - [x] Add `.github/workflows/release.yml` triggered by version tags, with manual dispatch for a specified validated tag.
 - [x] Reject mismatched tag/application versions and release commits outside `main`; run required checks against the exact release commit.
-- [x] Build Windows x64 and separate macOS Intel/Apple Silicon artifacts: NSIS on Windows, app archives and DMGs on Mac. Hosted output verification is pending.
+- [x] Build Windows x64 and separate macOS Intel/Apple Silicon artifacts: NSIS on Windows, app archives and DMGs on Mac. Output must pass signature and inventory verification before draft creation.
 - [x] Use official Tauri release tooling to produce installers, updater artifacts, signatures, and updater metadata (`latest.json`).
 - [x] Store signing secrets in GitHub Actions secrets; keep the updater public key in app configuration. Updater signatures are separate from Windows code signing and Apple signing/notarization.
 - [x] Keep PR workflows read-only and without signing secrets; grant release write permissions only to the release jobs that require them.
-- [x] Implement complete-artifact validation and draft-release assembly with changelog, signatures, and checksums. Hosted draft creation is pending.
+- [x] Implement complete-artifact validation and draft-release assembly with changelog, signatures, and checksums. Draft creation results are recorded in the linked release run.
 - [x] Preserve a failed build as a failed/unpublished release; never advertise a partial release through the stable updater endpoint.
 
 Verified setup: squash-only merges and merged-branch deletion; required Windows/Mac checks and PRs on `main`; immutable `v*` tag rules; GitHub published-release immutability; updater signing secret configured. Local backup is outside Git. Windows Authenticode and Apple signing/notarization are unavailable and disclosed in release notes. The first pipeline test is `0.1.1-beta.1`; no stable release is published automatically.
