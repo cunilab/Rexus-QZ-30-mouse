@@ -102,18 +102,6 @@ function showPage(settings) {
 byId("nav-controls").addEventListener("click", () => showPage(false));
 byId("nav-settings").addEventListener("click", () => showPage(true));
 
-function showPage(settings) {
-  byId("controls-page").hidden = settings;
-  byId("settings-page").hidden = !settings;
-  byId("nav-controls").setAttribute("aria-current", settings ? "false" : "page");
-  byId("nav-settings").setAttribute("aria-current", settings ? "page" : "false");
-  byId("page-name").textContent = settings ? "Settings" : "QZ30 Black";
-  byId(settings ? "settings-title" : "controls-title").focus();
-}
-
-byId("nav-controls").addEventListener("click", () => showPage(false));
-byId("nav-settings").addEventListener("click", () => showPage(true));
-
 function isDirty() {
   return inputs.some(([key]) => actionSignature(draft[key]) !== actionSignature(saved[key]));
 }
