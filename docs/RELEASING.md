@@ -21,13 +21,17 @@ The Tauri updater requires its own signing key pair. `TAURI_SIGNING_PRIVATE_KEY`
 - Do not assume a signing credential works because a workflow references it. Verify signing results before distribution, and update this document when OS signing is configured.
 - Do not commit private keys or include them in artifacts/logs. Do not publish updater metadata whose signing key differs from the key trusted by the app.
 
-The updater secret is configured on GitHub. The first hosted packaging run remains a verification gate. The updater client and user-facing update prompt are a later roadmap milestone, not a consequence of adding release infrastructure.
+The updater secret is configured on GitHub. Every hosted packaging run must pass artifact and signature verification. The updater client and user-facing update prompt are a later roadmap milestone, not a consequence of adding release infrastructure.
 
 ## Build, inspect, and publish
 
 `.github/workflows/release.yml` runs for pushed `v*` tags and accepts a manual `tag` input for an existing version tag. It validates tag/application agreement and that the commit belongs to `main`, then runs reusable checks against that exact commit. The pinned official Tauri action builds a Windows x64 NSIS installer and separate macOS Intel (`x86_64`) and Apple Silicon (`aarch64`) app/DMG packages, plus signed updater artifacts, using `src-tauri/tauri.release.conf.json`.
 
-Packaging output is staged and validated across all three targets before checksums and `latest.json` are assembled and a draft is created. An existing GitHub Release is rejected rather than having its assets overwritten. Use the workflow's configured signing prerequisites; never bypass a failed signing/build gate to publish partial output. The first hosted run must verify this path end to end; local configuration is not proof that GitHub produced or signed working packages.
+Packaging output is staged and validated across all three targets before checksums and `latest.json` are assembled and a draft is created. An existing GitHub Release is rejected rather than having its assets overwritten. Use the workflow's configured signing prerequisites; never bypass a failed signing/build gate to publish partial output. Local configuration alone is not proof that GitHub produced or signed working packages.
+
+Foundation evidence: [PR #1 and its required Windows/Mac checks](https://github.com/cunilab/Rexus-QZ-30-mouse/pull/1), followed by the [v0.1.1-beta.1 release run](https://github.com/cunilab/Rexus-QZ-30-mouse/actions/runs/39235833219). The beta tag points at the tested foundation merge; it is not a stable publication or proof of an installed update.
+
+The first beta run built and uploaded all three platforms but its final check used a REST tag endpoint that did not return the unpublished draft. Release lookup now uses GraphQL. The manual **Verify draft release** workflow downloads an existing draft and checks its complete inventory, SHA-256 checksums, updater signatures and tag-specific URLs without rebuilding, changing tags, or publishing. This also provides a repeatable check before manual publication. A successful verification run is separate from the historical failed run; do not rewrite the beta tag to hide that failure.
 
 Inspect the draft before publishing:
 
