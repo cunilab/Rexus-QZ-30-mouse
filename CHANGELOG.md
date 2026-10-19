@@ -15,6 +15,10 @@ Pipeline-validation prerelease; not a stable release or a claim of Mac hardware 
 - Windows/macOS CI and draft-release packaging foundation.
 - Signature and complete-artifact validation for Windows x64 and Mac Intel/Apple Silicon updater packages.
 
+### Fixed
+
+- Mac volume-event integer types now match AppKit's native API.
+
 ## [0.1.0]
 
 Initial development version; this heading does not imply that a signed release has been published.

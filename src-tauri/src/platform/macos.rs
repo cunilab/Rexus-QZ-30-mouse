@@ -360,8 +360,8 @@ fn media_volume(up: bool) -> Result<(), String> {
 fn media_volume_event(up: bool) -> Result<(), String> {
     use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
     use objc2_foundation::NSPoint;
-    let key = if up { 0 } else { 1 };
-    let create = |state| {
+    let key: isize = if up { 0 } else { 1 };
+    let create = |state: isize| {
         NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
             NSEventType::SystemDefined, NSPoint::new(0.0, 0.0), NSEventModifierFlags::empty(),
             0.0, 0, None, 8, (key << 16) | state, -1,

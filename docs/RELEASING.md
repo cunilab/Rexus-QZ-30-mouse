@@ -21,7 +21,7 @@ The Tauri updater requires its own signing key pair. `TAURI_SIGNING_PRIVATE_KEY`
 - Do not assume a signing credential works because a workflow references it. Verify signing results before distribution, and update this document when OS signing is configured.
 - Do not commit private keys or include them in artifacts/logs. Do not publish updater metadata whose signing key differs from the key trusted by the app.
 
-Signing availability and the first hosted packaging run remain external release gates. The updater client and user-facing update prompt are a later roadmap milestone, not a consequence of adding release infrastructure.
+The updater secret is configured on GitHub. The first hosted packaging run remains a verification gate. The updater client and user-facing update prompt are a later roadmap milestone, not a consequence of adding release infrastructure.
 
 ## Build, inspect, and publish
 
@@ -37,4 +37,4 @@ Inspect the draft before publishing:
 - Install and launch on each platform, verify settings survive upgrades, and verify the OS-signing status claimed in the release notes.
 - A test prerelease proves the complete process without entering the stable update feed. An end-to-end update test is required once the updater client is implemented.
 
-Only then publish the draft manually. Keep failed or incomplete releases unpublished. Prereleases stay marked as prereleases and outside stable updates. Never overwrite a published version's assets or replace its tag; fix mistakes with a new version. Existing published release protection and manual publication must be checked on GitHub, not inferred from local YAML.
+Only then publish the draft manually. Keep failed or incomplete releases unpublished. Prereleases stay marked as prereleases and outside stable updates. Never overwrite a published version's assets or replace its tag; fix mistakes with a new version. GitHub release immutability and an active version-tag update/deletion ruleset are enabled for this repository. Recheck these settings before publication; workflow files alone do not enforce them.
