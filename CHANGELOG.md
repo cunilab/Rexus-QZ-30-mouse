@@ -4,6 +4,19 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+## [0.1.1-beta.2]
+
+### Added
+
+- Optional launch at login, with login launches hidden in the tray or Mac menu bar.
+- Close to tray/menu bar, with Open, Pause/Resume mappings, status, and Quit commands.
+- Reopening the app restores the existing window instead of starting another listener.
+
+### Validation limits
+
+- Windows/Mac native GUI clicks and actual login behavior require manual checks; the Computer Use helper was unavailable during development.
+- Automatic mapping activation and save-and-apply remain Milestone 2.
+
 ## [0.1.1-beta.1]
 
 Pipeline-validation prerelease; not a stable release or a claim of Mac hardware validation.

@@ -56,6 +56,11 @@ function setup(invoke) {
       select.events.change();
     },
     click: (id) => document.getElementById(id).events.click(),
+    startup(enabled) {
+      const checkbox = document.getElementById("launch-at-login");
+      checkbox.checked = enabled;
+      checkbox.events.change();
+    },
   };
 }
 
@@ -64,6 +69,7 @@ function nativeApp() {
     platform: "windows", devices: [{ transport: "USB" }], enabled: false,
     permission: "granted", hook_running: false, last_input: null, error: null,
     thumb_available: true,
+    launch_at_login: false,
     mappings: Object.fromEntries(["back", "forward", "middle", "wheel_left", "wheel_right"].map((key) => [key, "default"])),
   };
   let failure = null;
@@ -75,6 +81,7 @@ function nativeApp() {
     if (command === "get_status" && readGate) await readGate;
     if (command === "save_mappings") status = { ...status, mappings: { ...args.mappings } };
     if (command === "set_enabled") status = { ...status, enabled: args.enabled, hook_running: args.enabled };
+    if (command === "set_launch_at_login") status = { ...status, launch_at_login: args.enabled };
     return structuredClone(status);
   });
   return {
@@ -181,4 +188,70 @@ test("native failures remain visible, preserve edits, and recover controls", asy
   await tick();
   assert.equal(native.status.mappings.back, "undo");
   assert.equal(native.app.get("enable").disabled, false);
+});
+
+test("launch at login starts off, uses OS status, and preserves mapping drafts", async () => {
+  const native = nativeApp();
+  await tick();
+  assert.equal(native.app.get("launch-at-login").checked, false);
+  assert.equal(native.app.get("launch-at-login").disabled, false);
+  native.app.change("back", "copy");
+  native.app.startup(true);
+  assert.equal(native.app.get("launch-at-login").disabled, true);
+  await tick();
+  assert(native.calls.includes("set_launch_at_login"));
+  assert.equal(native.status.launch_at_login, true);
+  assert.equal(native.app.get("launch-at-login").checked, true);
+  assert.equal(native.app.get("mapping-back").value, "copy");
+  assert.equal(native.app.get("draft-state").textContent, "Unsaved changes");
+  native.app.startup(false);
+  await tick();
+  assert.equal(native.status.launch_at_login, false);
+  assert.equal(native.app.get("launch-at-login").checked, false);
+});
+
+test("failed login change restores the saved setting and shows an error", async () => {
+  const native = nativeApp();
+  await tick();
+  native.fail("OS denied login registration");
+  native.app.startup(true);
+  await tick();
+  assert.equal(native.status.launch_at_login, false);
+  assert.equal(native.app.get("launch-at-login").checked, false);
+  assert.equal(native.app.get("message").hidden, false);
+  assert.match(native.app.get("message").textContent, /OS denied login registration/);
+  native.fail(null);
+  await native.app.poll();
+  assert.equal(native.app.get("launch-at-login").disabled, false);
+});
+
+test("login control is disabled in preview, before status, and when unavailable", async () => {
+  const preview = setup();
+  assert.equal(preview.get("launch-at-login").disabled, true);
+  const native = nativeApp();
+  assert.equal(native.app.get("launch-at-login").disabled, true);
+  await tick();
+  native.status.launch_at_login = null;
+  await native.app.poll();
+  assert.equal(native.app.get("launch-at-login").disabled, true);
+  const count = native.calls.length;
+  native.app.startup(true);
+  assert.equal(native.calls.length, count);
+  assert.match(native.app.get("startup-detail").textContent, /unavailable/);
+});
+
+test("login control stays disabled while another command is pending", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("back", "copy");
+  const release = native.holdReads();
+  const pending = native.app.poll();
+  native.app.click("save");
+  assert.equal(native.app.get("launch-at-login").disabled, true);
+  native.app.startup(true);
+  assert(!native.calls.includes("set_launch_at_login"));
+  release();
+  await pending;
+  await tick();
+  assert.equal(native.app.get("launch-at-login").disabled, false);
 });

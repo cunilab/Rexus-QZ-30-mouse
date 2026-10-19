@@ -104,6 +104,10 @@ function render() {
   byId("enable-detail").textContent = enabled ? (status.hook_running ? "Mappings are active. Switch off to edit." : "Mappings enabled; input listener is not running.") : preview ? "Desktop connection required to enable." : connectionFailed ? "Waiting for the desktop connection." : dirty ? "Save your changes before enabling." : !detected ? "Connect a compatible receiver first." : !hasMapping ? "Choose and save at least one shortcut." : status?.permission === "required" ? "Enable to request macOS input permissions." : "Ready when you are. Enable to start.";
   byId("permission").hidden = status?.platform !== "macos" || status?.permission !== "required";
   byId("permission").disabled = busy;
+  const startupAvailable = typeof status?.launch_at_login === "boolean";
+  byId("launch-at-login").checked = status?.launch_at_login === true;
+  byId("launch-at-login").disabled = unavailable || busy || !startupAvailable;
+  byId("startup-detail").textContent = preview ? "Open the desktop app to change login settings." : connectionFailed ? "Login settings unavailable while reconnecting." : !initialized ? "Checking login settings…" : !startupAvailable ? "Launch at login is unavailable on this system." : status.launch_at_login ? "QZ Flow will start quietly when you log in." : "QZ Flow will only start when you open it.";
 }
 
 async function refresh() {
@@ -152,6 +156,9 @@ byId("enable").addEventListener("click", () => {
   if (!byId("enable").disabled) runCommand("set_enabled", { enabled: !status.enabled }, status.enabled ? "Mappings disabled." : "Mappings enabled.");
 });
 byId("permission").addEventListener("click", () => runCommand("open_input_settings", {}, "Input settings opened. Grant access, then enable mappings again."));
+byId("launch-at-login").addEventListener("change", () => {
+  if (!byId("launch-at-login").disabled) runCommand("set_launch_at_login", { enabled: byId("launch-at-login").checked }, "Login setting updated.");
+});
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 render();
 refresh();
