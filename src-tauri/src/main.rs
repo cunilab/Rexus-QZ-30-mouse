@@ -3,6 +3,7 @@
 mod engine;
 mod lifecycle;
 mod platform;
+mod startup;
 
 use engine::{Action, Engine, Input, Mappings};
 use serde::Serialize;
@@ -18,7 +19,6 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
-use tauri_plugin_autostart::ManagerExt;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Device {
@@ -136,7 +136,7 @@ fn get_status(app: tauri::AppHandle, state: tauri::State<AppState>) -> Status {
 
 fn app_status(app: &tauri::AppHandle, state: &AppState) -> Status {
     let mut status = state.shared.status();
-    match app.autolaunch().is_enabled() {
+    match startup::is_enabled(app) {
         Ok(enabled) => status.launch_at_login = Some(enabled),
         Err(error) => {
             status
@@ -157,13 +157,8 @@ fn set_launch_at_login(
         .control
         .lock()
         .map_err(|_| "App control is unavailable. Restart QZ Flow.")?;
-    let manager = app.autolaunch();
-    if enabled {
-        manager.enable()
-    } else {
-        manager.disable()
-    }
-    .map_err(|error| format!("Could not change launch-at-login settings: {error}"))?;
+    startup::set_enabled(&app, enabled)
+        .map_err(|error| format!("Could not change launch-at-login settings: {error}"))?;
     let status = app_status(&app, &state);
     if status.launch_at_login != Some(enabled) {
         return Err("The operating system did not confirm the login setting. Try again.".into());
@@ -350,7 +345,6 @@ fn main() {
                 lifecycle::show(app);
             }
         }))
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("mappings.json");
             let shared = Arc::new(Shared::default());
