@@ -35,25 +35,20 @@ pub fn hide(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn menu_state(status: &Status) -> (&'static str, &'static str, bool) {
-    let active = status.enabled && status.hook_running;
-    let label = if active {
-        "Mappings: Active"
-    } else if status.error.is_some()
-        || status.devices.is_empty()
-        || (status.enabled && !status.hook_running)
-    {
-        "Mappings: Unavailable"
-    } else {
-        "Mappings: Paused"
+    let label = match status.mapping_state {
+        "active" => "Mappings: Active",
+        "paused" => "Mappings: Paused",
+        "default" => "Mappings: Default",
+        _ => "Mappings: Unavailable",
     };
     (
         label,
-        if active {
-            "Pause mappings"
-        } else {
+        if status.paused {
             "Resume mappings"
+        } else {
+            "Pause mappings"
         },
-        active || !status.mappings.is_default(),
+        status.paused || !status.mappings.is_default(),
     )
 }
 
@@ -120,8 +115,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             "toggle" => {
                 let state = app.state::<AppState>();
                 let status = state.shared.status();
-                if let Err(error) = change_enabled(!(status.enabled && status.hook_running), &state)
-                {
+                if let Err(error) = change_enabled(status.paused, &state) {
                     state
                         .shared
                         .engine
@@ -170,30 +164,26 @@ mod tests {
         let mut status = shared.status();
         assert_eq!(
             menu_state(&status),
-            ("Mappings: Unavailable", "Resume mappings", false)
+            ("Mappings: Default", "Pause mappings", false)
         );
         status.mappings.back = Action::Copy;
-        status.devices.push(crate::Device {
-            vendor_id: 0x276d,
-            product_id: 0x1902,
-            name: "test".into(),
-            transport: "USB".into(),
-        });
+        status.mapping_state = "unavailable";
+        assert_eq!(
+            menu_state(&status),
+            ("Mappings: Unavailable", "Pause mappings", true)
+        );
+        status.paused = true;
+        status.mapping_state = "paused";
         assert_eq!(
             menu_state(&status),
             ("Mappings: Paused", "Resume mappings", true)
         );
-        status.enabled = true;
-        status.hook_running = true;
+        status.paused = false;
+        status.mapping_state = "active";
         assert_eq!(
             menu_state(&status),
             ("Mappings: Active", "Pause mappings", true)
         );
-        status.hook_running = false;
-        assert_eq!(menu_state(&status).0, "Mappings: Unavailable");
-        status.enabled = false;
-        status.error = Some("Permission denied".into());
-        assert_eq!(menu_state(&status).0, "Mappings: Unavailable");
     }
 
     #[test]
