@@ -4,6 +4,19 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+## [0.1.1-beta.6]
+
+### Fixed
+
+- Initialize the QZ30 receiver before enabling button 4's separate input reports, so its saved action can replace the built-in Show Desktop shortcut.
+- Perform receiver setup outside engine/UI locks, validate completed acknowledgements, and show Preparing until button 4 is ready. Setup failures pause mappings with an error.
+- Restore the OEM default input mask on Pause, Default behavior and normal Quit; prepare the mode again after a detected receiver reconnect or mode reset.
+- Wait for Quit cleanup on a background task to keep the UI responsive.
+
+### Validation limits
+
+- A receiver-only physical test confirmed Show Desktop stops and thumb press/release reports arrive after initialization. Integrated beta.6 action execution and forced-exit/reconnect behavior require separate verification.
+
 ## [0.1.1-beta.5]
 
 ### Fixed

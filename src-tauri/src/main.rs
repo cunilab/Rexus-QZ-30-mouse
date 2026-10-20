@@ -41,6 +41,8 @@ pub struct Shared {
     inventory: Mutex<Inventory>,
     hook_running: AtomicBool,
     stopping: AtomicBool,
+    shutdown_complete: AtomicBool,
+    thumb_ready: AtomicBool,
     recording: AtomicBool,
     processing: AtomicBool,
     dispatch_releases: AtomicU8,
@@ -135,12 +137,19 @@ impl Shared {
         let inventory = self.inventory.lock().unwrap_or_else(|e| e.into_inner());
         let engine = self.engine.lock().unwrap_or_else(|e| e.into_inner());
         let hook_running = self.hook_running.load(Ordering::Acquire);
-        let enabled = engine.enabled
+        let running = engine.enabled
             && hook_running
             && !engine.paused
             && !self.stopping.load(Ordering::Acquire);
+        let preparing = running
+            && cfg!(windows)
+            && engine.mappings.thumb != Action::Default
+            && !self.thumb_ready.load(Ordering::Acquire);
+        let enabled = running && !preparing;
         let mapping_state = if engine.paused {
             "paused"
+        } else if preparing {
+            "preparing"
         } else if enabled {
             "active"
         } else if engine.mappings.is_default() && engine.error.is_none() {
@@ -365,6 +374,12 @@ fn main() {
         .expect("Could not start QZ Flow")
         .run(|app, event| {
             match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    if !app.state::<AppState>().shared.shutdown_complete.load(Ordering::Acquire) {
+                        api.prevent_exit();
+                        lifecycle::quit(app);
+                    }
+                }
                 tauri::RunEvent::Exit => lifecycle::stop(app),
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => lifecycle::show(app),
@@ -376,6 +391,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn thumb_is_preparing_until_receiver_acknowledges_mode() {
+        let shared = Shared::default();
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        shared.hook_running.store(true, Ordering::Release);
+        assert_eq!(shared.status().mapping_state, "preparing");
+        assert!(!shared.status().enabled);
+        shared.thumb_ready.store(true, Ordering::Release);
+        assert_eq!(shared.status().mapping_state, "active");
+        assert!(shared.status().enabled);
+    }
+
     #[test]
     fn status_never_reports_dead_listener_as_active_and_retains_explicit_pause() {
         let shared = Shared::default();

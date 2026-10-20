@@ -101,7 +101,7 @@ Settings use a versioned envelope with a persistent Pause preference. Legacy ass
 
 ## Milestone 3 — Expanded actions and button editor
 
-Status: implementation complete, with a beta.4 native-input regression reported. Beta.5 repairs require hosted CI and physical Windows/Mac validation before acceptance. Named shortcuts depend on OS/app configuration; recording cannot intercept secure system shortcuts.
+Status: implementation complete, with a beta.4 native-input regression reported. Beta.5 automated Windows/Mac checks passed; native safety acceptance remains open. Beta.6 adds verified receiver initialization for button4; its integrated action and lifecycle checks are tracked in docs/VALIDATION.md. Named shortcuts depend on OS/app configuration; recording cannot intercept secure system shortcuts.
 
 - [x] Group dropdown choices by purpose.
 - [x] Add custom keyboard shortcut recording, with clear modifier labels for each OS.

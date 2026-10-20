@@ -354,6 +354,16 @@ test("all-default saves work without a receiver and restore default behavior", a
   assert.equal(native.app.get("draft-state").textContent, "Saved locally");
 });
 
+test("thumb setup waits for receiver readiness before showing mappings active", async () => {
+  const native = nativeApp({ mapping_state: "preparing", hook_running: true });
+  await tick();
+  assert.equal(native.app.get("mapping-status").textContent, "Preparing button 4");
+  assert.match(native.app.get("mapping-detail").textContent, /receiver to confirm/);
+  Object.assign(native.status, { mapping_state: "active", enabled: true });
+  await native.app.poll();
+  assert.equal(native.app.get("mapping-status").textContent, "Mappings active");
+});
+
 test("unknown mapping state is not presented as active and permissions point to Save", async () => {
   const native = nativeApp({ platform: "macos", permission: "required", mapping_state: "future_state" });
   await tick();

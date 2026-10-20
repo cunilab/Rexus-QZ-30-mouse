@@ -39,4 +39,6 @@ Verify one assignment at a time with the original mouse utility closed: desktop 
 
 ## Input failure recovery
 
+On Windows with the compatible USB receiver, a custom button4 action first initializes the receiver in the background. Wait for **Mappings active**. Keep Mouse Assistant closed. Setup failures pause mappings and show an error; Save and apply retries. Pause, Default behavior for button4, and normal Quit restore the OEM's default input mode. Forced termination cannot guarantee that reset. Bluetooth and macOS thumb remapping remain unverified.
+
 If Windows accepts only part of a shortcut, QZ Flow accounts for those inserted events and checks immediate release recovery. A failure pauses mappings for the current session. It does not force delayed key-up events, since a key may now be physically held. Follow the displayed instruction to press and release Ctrl, Alt, Shift and Windows, then resume only when typing is normal. Failed cleanup blocks new injection until the pending keys are confirmed released. Forced process termination cannot guarantee cleanup. Native runtime verification is still required for beta.5; a passing fake-sender test is not a hardware pass.

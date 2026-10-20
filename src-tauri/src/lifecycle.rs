@@ -37,6 +37,7 @@ pub fn hide(app: &AppHandle) -> tauri::Result<()> {
 fn menu_state(status: &Status) -> (&'static str, &'static str, bool) {
     let label = match status.mapping_state {
         "active" => "Mappings: Active",
+        "preparing" => "Mappings: Preparing button 4",
         "paused" => "Mappings: Paused",
         "default" => "Mappings: Default",
         _ => "Mappings: Unavailable",
@@ -74,6 +75,36 @@ pub fn stop(app: &AppHandle) {
     stop_state(&state);
 }
 
+fn begin_shutdown(shared: &crate::Shared) -> bool {
+    if shared.stopping.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    shared
+        .engine
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .enabled = false;
+    true
+}
+
+pub fn quit(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if !begin_shutdown(&state.shared) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        stop(&app);
+        app.state::<AppState>()
+            .shared
+            .shutdown_complete
+            .store(true, Ordering::Release);
+        app.exit(0);
+    });
+}
+
 fn stop_state(state: &AppState) {
     state.shared.stopping.store(true, Ordering::Release);
     let mut hook = state
@@ -108,8 +139,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open QZ Flow", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Mappings: Paused", false, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Resume mappings", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &status, &toggle, &quit])?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &status, &toggle, &quit_item])?;
     app.manage(TrayItems { status, toggle });
     let icon = app
         .default_window_icon()
@@ -135,10 +166,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 }
                 sync_tray(app);
             }
-            "quit" => {
-                stop(app);
-                app.exit(0);
-            }
+            "quit" => quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -215,5 +243,16 @@ mod tests {
         assert!(!engine.enabled);
         assert!(!engine.is_suppressed(crate::Input::Middle));
         assert!(state.control.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn shutdown_disables_mappings_before_cleanup_and_is_claimed_once() {
+        let shared = Shared::default();
+        shared.engine.lock().unwrap().enabled = true;
+        assert!(begin_shutdown(&shared));
+        assert!(shared.stopping.load(Ordering::Acquire));
+        assert!(!shared.engine.lock().unwrap().enabled);
+        assert!(!shared.shutdown_complete.load(Ordering::Acquire));
+        assert!(!begin_shutdown(&shared));
     }
 }

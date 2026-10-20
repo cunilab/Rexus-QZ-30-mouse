@@ -3,11 +3,15 @@ use crate::{
     Device, Shared,
 };
 mod keyboard;
+mod receiver;
 mod trace;
 use std::{
     mem::size_of,
     ptr::null_mut,
-    sync::{atomic::Ordering, mpsc, Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex, OnceLock,
+    },
     thread::{self, JoinHandle},
 };
 pub use trace::trace_buttons;
@@ -195,15 +199,131 @@ pub fn open_input_settings() -> Result<(), String> {
 pub struct Hook {
     thread_id: u32,
     join: Option<JoinHandle<()>>,
+    receiver_stop: Arc<AtomicBool>,
+    receiver_join: Option<JoinHandle<()>>,
 }
 
 impl Drop for Hook {
     fn drop(&mut self) {
+        self.receiver_stop.store(true, Ordering::Release);
+        if let Some(worker) = &self.receiver_join {
+            worker.thread().unpark();
+        }
         unsafe {
             PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0);
         }
         if let Some(join) = self.join.take() {
             let _ = join.join();
+        }
+        if let Some(join) = self.receiver_join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+fn run_receiver(
+    shared: &Shared,
+    stop: &AtomicBool,
+    mut configure: impl FnMut(bool, &AtomicBool) -> Result<(), receiver::ConfigurationError>,
+    mut probe: impl FnMut(bool) -> Result<Option<bool>, String>,
+    probe_interval: std::time::Duration,
+) {
+    let mut requested = false;
+    let mut active = false;
+    let mut connected = true;
+    let mut next_probe = std::time::Instant::now();
+    while !stop.load(Ordering::Acquire) {
+        let thumb_requested = {
+            let engine = shared.engine.lock().unwrap_or_else(|e| e.into_inner());
+            !engine.paused && engine.mappings.thumb != Action::Default
+        } && !shared.stopping.load(Ordering::Acquire);
+        if !thumb_requested && !active {
+            connected = true;
+            next_probe = std::time::Instant::now();
+        }
+        if (thumb_requested || active) && std::time::Instant::now() >= next_probe {
+            next_probe = std::time::Instant::now() + probe_interval;
+            match probe(active) {
+                Ok(None) => {
+                    connected = false;
+                    active = false;
+                    requested = false;
+                    shared.thumb_ready.store(false, Ordering::Release);
+                    shared
+                        .engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .enabled = false;
+                }
+                Ok(Some(mode_active)) => {
+                    connected = true;
+                    if active && !mode_active {
+                        active = false;
+                        requested = false;
+                        shared.thumb_ready.store(false, Ordering::Release);
+                    }
+                }
+                Err(error) => {
+                    let mut engine = shared.engine.lock().unwrap_or_else(|e| e.into_inner());
+                    engine.enabled = false;
+                    engine.paused = true;
+                    engine.error = Some(format!("Could not check button 4 receiver mode: {error}"));
+                }
+            }
+        }
+        if !connected {
+            thread::park_timeout(std::time::Duration::from_millis(100));
+            continue;
+        }
+        let desired = {
+            let engine = shared.engine.lock().unwrap_or_else(|e| e.into_inner());
+            engine.enabled && !engine.paused && engine.mappings.thumb != Action::Default
+        } && !shared.stopping.load(Ordering::Acquire);
+        if desired != requested {
+            requested = desired;
+            shared.thumb_ready.store(false, Ordering::Release);
+            if desired || active {
+                // HID requests can wait for the radio; never hold shared state across them.
+                let result = configure(desired, stop);
+                match result {
+                    Ok(()) => {
+                        active = desired;
+                        shared.thumb_ready.store(active, Ordering::Release);
+                    }
+                    Err(error) => {
+                        active |= error.reset_needed;
+                        let disconnected =
+                            !stop.load(Ordering::Acquire) && matches!(probe(false), Ok(None));
+                        if disconnected {
+                            connected = false;
+                            active = false;
+                            requested = false;
+                            shared
+                                .engine
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .enabled = false;
+                        } else {
+                            let mut engine =
+                                shared.engine.lock().unwrap_or_else(|e| e.into_inner());
+                            engine.enabled = false;
+                            engine.paused = true;
+                            engine.error = Some(format!("Button 4 receiver setup failed: {error}"));
+                        }
+                    }
+                }
+            }
+        }
+        thread::park_timeout(std::time::Duration::from_millis(100));
+    }
+    shared.thumb_ready.store(false, Ordering::Release);
+    if active {
+        if let Err(error) = configure(false, &AtomicBool::new(false)) {
+            shared
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .error = Some(format!("Could not restore button 4 default mode: {error}"));
         }
     }
 }
@@ -211,7 +331,9 @@ impl Drop for Hook {
 pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
     let _ = SHARED.set(shared.clone());
     let (sender, receiver) = mpsc::sync_channel(1);
+    let hook_shared = shared.clone();
     let join = thread::spawn(move || unsafe {
+        let shared = hook_shared;
         let mut msg = MSG::default();
         PeekMessageW(&mut msg, null_mut(), 0, 0, PM_NOREMOVE);
         let hook = SetWindowsHookExW(
@@ -249,10 +371,44 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
             .enabled = false;
     });
     match receiver.recv() {
-        Ok(Ok(thread_id)) => Ok(Hook {
-            thread_id,
-            join: Some(join),
-        }),
+        Ok(Ok(thread_id)) => {
+            let receiver_stop = Arc::new(AtomicBool::new(false));
+            let mut hook = Hook {
+                thread_id,
+                join: Some(join),
+                receiver_stop: receiver_stop.clone(),
+                receiver_join: None,
+            };
+            hook.receiver_join = Some(
+                thread::Builder::new()
+                    .name("qz-receiver".into())
+                    .spawn(move || {
+                        run_receiver(
+                            &shared,
+                            &receiver_stop,
+                            |enabled, cancel| {
+                                if enabled {
+                                    ensure_no_vendor_utility()?;
+                                }
+                                receiver::set_thumb_mode(enabled, cancel)
+                            },
+                            |owned_mode| {
+                                if devices()?.is_empty() {
+                                    Ok(None)
+                                } else if !owned_mode {
+                                    // The last feature reply need not be a mask before initialization.
+                                    Ok(Some(false))
+                                } else {
+                                    receiver::thumb_mode_active().map(Some)
+                                }
+                            },
+                            std::time::Duration::from_secs(2),
+                        );
+                    })
+                    .map_err(|error| format!("Could not start receiver setup: {error}"))?,
+            );
+            Ok(hook)
+        }
         Ok(Err(error)) => {
             let _ = join.join();
             Err(error)
@@ -702,6 +858,341 @@ fn perform(action: Action) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn receiver_bootstraps_before_requiring_an_owned_mask_acknowledgement() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let recorded_reply = [0xbb, 0, 1, 2, 3, 0xb7, 0x2e, 0x8b];
+        let mut writes = Vec::new();
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, _| {
+                writes.push(enabled);
+                if enabled {
+                    stop.store(true, Ordering::Release);
+                }
+                Ok(())
+            },
+            |owned_mode| {
+                if owned_mode && recorded_reply[1] != 2 {
+                    Err("last reply is not a mask".into())
+                } else {
+                    Ok(Some(false))
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(writes, [true, false]);
+        assert!(shared.engine.lock().unwrap().error.is_none());
+    }
+
+    #[test]
+    fn failed_enable_cleanup_is_retried_during_shutdown() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let mut writes = Vec::new();
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, _| {
+                writes.push(enabled);
+                if enabled {
+                    stop.store(true, Ordering::Release);
+                    Err(receiver::ConfigurationError {
+                        message: "reset failed".into(),
+                        reset_needed: true,
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+            |_| Ok(Some(true)),
+            std::time::Duration::from_secs(2),
+        );
+        assert_eq!(writes, [true, false]);
+        assert!(shared
+            .engine
+            .lock()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("reset failed"));
+    }
+
+    #[test]
+    fn unknown_probe_retains_reset_responsibility() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let mut writes = Vec::new();
+        let mut probes = 0;
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, _| {
+                writes.push(enabled);
+                if !enabled {
+                    stop.store(true, Ordering::Release);
+                }
+                Ok(())
+            },
+            |_| {
+                probes += 1;
+                if probes == 1 {
+                    Ok(Some(false))
+                } else {
+                    Err("busy or invalid response".into())
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(writes, [true, false]);
+        assert!(shared.engine.lock().unwrap().paused);
+    }
+
+    #[test]
+    fn default_thumb_never_requires_feature_interface_for_other_mappings() {
+        let shared = Shared::default();
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.back = Action::Copy;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let delayed_stop = stop.clone();
+        let current = thread::current();
+        let stopper = thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(10));
+            delayed_stop.store(true, Ordering::Release);
+            current.unpark();
+        });
+        run_receiver(
+            &shared,
+            &stop,
+            |_, _| panic!("unexpected thumb configuration"),
+            |_| panic!("unexpected feature probe"),
+            std::time::Duration::ZERO,
+        );
+        stopper.join().unwrap();
+        assert!(!shared.engine.lock().unwrap().paused);
+    }
+
+    #[test]
+    fn receiver_reauthenticates_after_disconnect_without_pausing_preference() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let mut writes = Vec::new();
+        let mut probes = 0;
+        let mut enables = 0;
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, _| {
+                writes.push(enabled);
+                if enabled {
+                    enables += 1;
+                    if enables == 2 {
+                        stop.store(true, Ordering::Release);
+                    }
+                }
+                Ok(())
+            },
+            |_| {
+                probes += 1;
+                if probes == 2 {
+                    return Ok(None);
+                }
+                if probes == 3 {
+                    shared.engine.lock().unwrap().enabled = true;
+                }
+                Ok(Some(false))
+            },
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(writes, [true, true, false]);
+        assert!(!shared.engine.lock().unwrap().paused);
+    }
+
+    #[test]
+    fn receiver_reauthenticates_when_acknowledged_mode_is_lost() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let mut writes = Vec::new();
+        let mut enables = 0;
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, _| {
+                writes.push(enabled);
+                if enabled {
+                    enables += 1;
+                    if enables == 2 {
+                        stop.store(true, Ordering::Release);
+                    }
+                }
+                Ok(())
+            },
+            |_| Ok(Some(false)),
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(writes, [true, true, false]);
+    }
+
+    #[test]
+    fn receiver_retains_cleanup_failure_during_shutdown() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        run_receiver(
+            &shared,
+            &stop,
+            |_, _| {
+                stop.store(true, Ordering::Release);
+                Err(String::from("reset failed during cancellation").into())
+            },
+            |_| Ok(Some(true)),
+            std::time::Duration::from_secs(2),
+        );
+        assert!(shared
+            .engine
+            .lock()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("reset failed"));
+    }
+
+    #[test]
+    fn receiver_releases_engine_during_io_and_restores_after_pause() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let mut writes = Vec::new();
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, _| {
+                writes.push(enabled);
+                let mut engine = shared.engine.try_lock().expect("HID held engine lock");
+                if enabled {
+                    engine.paused = true;
+                } else {
+                    stop.store(true, Ordering::Release);
+                }
+                Ok(())
+            },
+            |_| Ok(Some(true)),
+            std::time::Duration::from_secs(2),
+        );
+        assert_eq!(writes, [true, false]);
+    }
+
+    #[test]
+    fn receiver_shutdown_restores_with_cancellation_disabled() {
+        let shared = Shared::default();
+        let stop = AtomicBool::new(false);
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let mut writes = Vec::new();
+        run_receiver(
+            &shared,
+            &stop,
+            |enabled, cancel| {
+                assert!(!cancel.load(Ordering::Acquire));
+                writes.push(enabled);
+                if enabled {
+                    stop.store(true, Ordering::Release);
+                }
+                Ok(())
+            },
+            |_| Ok(Some(true)),
+            std::time::Duration::from_secs(2),
+        );
+        assert_eq!(writes, [true, false]);
+    }
+
+    #[test]
+    fn failed_receiver_setup_pauses_without_repeating_device_writes() {
+        let shared = Arc::new(Shared::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::VolumeUp;
+        }
+        let worker_shared = shared.clone();
+        let worker_stop = stop.clone();
+        let worker = thread::spawn(move || {
+            let mut attempts = 0;
+            run_receiver(
+                &worker_shared,
+                &worker_stop,
+                |enabled, _| {
+                    assert!(enabled);
+                    attempts += 1;
+                    Err(String::from("fake acknowledgement timeout").into())
+                },
+                |_| Ok(Some(true)),
+                std::time::Duration::from_secs(2),
+            );
+            attempts
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !shared.engine.lock().unwrap().paused && std::time::Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let paused = shared.engine.lock().unwrap().paused;
+        stop.store(true, Ordering::Release);
+        worker.thread().unpark();
+        assert_eq!(worker.join().unwrap(), 1);
+        assert!(paused);
+        let engine = shared.engine.lock().unwrap();
+        assert!(!engine.enabled);
+        assert!(engine
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("fake acknowledgement timeout"));
+    }
+
     #[test]
     fn matches_only_the_observed_receiver_pair() {
         assert!(compatible_path(r"\\?\HID#VID_276D&PID_1902&MI_01"));
