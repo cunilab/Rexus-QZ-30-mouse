@@ -1,0 +1,68 @@
+{
+    "device":  "Andres / Windows",
+    "date":  "2026-10-20",
+    "scope":  "Receiver-filtered captures; no laptop keyboard, pointer coordinates or key injection",
+    "initialization":  [
+                           {
+                               "before":  "bb000102038445d3"
+                           },
+                           {
+                               "initialization_challenge":  "bb00010203d2db1b",
+                               "response":  "bb00010203f8c228"
+                           },
+                           {
+                               "initialization":  "challenge_validated",
+                               "device_info":  "bb0101010f00001c"
+                           }
+                       ],
+    "mode_and_reset":  [
+                           {
+                               "before":  "bb0101010f00001c"
+                           },
+                           {
+                               "probe":  "thumb_mask_acknowledged",
+                               "mask":  1024,
+                               "response":  "bb02000000040014",
+                               "seconds":  180
+                           },
+                           {
+                               "probe":  "oem_default_reset_acknowledged",
+                               "response":  "bb02000000000010"
+                           }
+                       ],
+    "selected_thumb_frames":  [
+                                  {
+                                      "kind":  "receiver_hid",
+                                      "body":  "0800000001000000bb04000400000012",
+                                      "time":  "2026-10-20T13:42:18.872996+00:00"
+                                  },
+                                  {
+                                      "kind":  "receiver_hid",
+                                      "body":  "0800000001000000bb04000000000016",
+                                      "time":  "2026-10-20T13:42:19.024731+00:00"
+                                  },
+                                  {
+                                      "kind":  "receiver_hid",
+                                      "body":  "0800000001000000bb04000400000012",
+                                      "time":  "2026-10-20T13:42:19.176861+00:00"
+                                  },
+                                  {
+                                      "kind":  "receiver_hid",
+                                      "body":  "0800000001000000bb04000000000016",
+                                      "time":  "2026-10-20T13:42:19.272860+00:00"
+                                  },
+                                  {
+                                      "kind":  "receiver_hid",
+                                      "body":  "0800000001000000bb04000400000012",
+                                      "time":  "2026-10-20T13:42:19.366963+00:00"
+                                  },
+                                  {
+                                      "kind":  "receiver_hid",
+                                      "body":  "0800000001000000bb04000000000016",
+                                      "time":  "2026-10-20T13:42:19.479544+00:00"
+                                  }
+                              ],
+    "user_confirmation":  "Done — Desktop stopped",
+    "oem_cleanup_evidence":  "ev_82fef97a6828be1edd4be24b4e33c6374f361babd2ccef8043afc97632a7b247",
+    "limitations":  "Protocol/input-mode test; integrated app action and lifecycle verification tracked separately in docs/VALIDATION.md."
+}

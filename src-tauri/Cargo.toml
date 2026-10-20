@@ -1,6 +1,6 @@
 [package]
 name = "qz-flow"
-version = "0.1.1-beta.3"
+version = "0.1.1-beta.6"
 edition = "2021"
 description = "Independent QZ30 desktop controls"
 
@@ -21,5 +21,5 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 
 [target.'cfg(windows)'.dependencies]
 windows-registry = "0.6.1"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_Security"] }
 

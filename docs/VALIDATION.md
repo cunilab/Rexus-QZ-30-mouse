@@ -1,5 +1,26 @@
 # Validation — first desktop slice
 
+## Button 4 receiver initialization — beta.6
+
+Local checks: 33 Node tests and 73 Windows Rust tests passed; formatting, version consistency, Clippy with warnings denied, and the optimized Windows build passed. Independent review passed after regression tests for bootstrap, mode loss, disconnect, cleanup failure and asynchronous Quit. The running beta.6 executable SHA256 is `861813c9a165cd3a45b1a5703fb5f0f067df0dd60f63903df699112d1a41218a`; a read-only feature query after app startup returned acknowledged mask `bb02000000040014`. Physical Volume up and lifecycle acceptance remain separate from these checks.
+
+On Andres Windows, a user-confirmed Show Desktop mismatch was traced to receiver keyboard events with no thumb vendor notification. After the original library's challenge/device-info initialization and acknowledged mask0x400, the user confirmed Show Desktop stopped and the read-only capture recorded paired `bb04000400000012` / `bb04000000000016` reports. Mask0 cleanup completed with a matching acknowledgement. See `analysis/THUMB-INPUT-MODE.md` for exact exchanges, earlier failed probes and limits. This input-mode test does not establish integrated beta.6 action execution or resolution of the earlier transient keyboard incident.
+
+## Beta.5 input safety repair
+
+The user reported Not responding and keyboard interference while using the wheel/buttons in beta.4. Keyboard behavior returned to normal after closing QZ Flow. This invalidates any inference of native safety from the earlier unit/build checks. [Incident and REA comparison](../analysis/INPUT-INCIDENT.md) distinguishes confirmed code hazards from the unresolved incident cause.
+
+Local repair validation: 32 Node tests and 53 Windows Rust tests passed, along with formatting, version consistency, and Clippy with warnings denied. Independent review passed after delayed-recovery and reentrant-release fixes. Repair tests use fake native senders and reentrant callbacks, without installing hooks or injecting real input. The repaired app is kept closed; saved mappings are paused with a backup for recovery. Physical Windows/Mac verification remains outstanding.
+
+
+## Milestone 3 ? 0.1.1-beta.4
+
+- Local Windows checks: 32 Node tests and 44 Rust tests passed, with version consistency, formatting and Clippy warnings denied. Optimized native build is checked separately from physical input execution.
+- Added coverage for structured action validation, version 1 migration/backups, raw-receiver Disable rejection, physical scan-code mapping/extended releases, recorder cancellation/drain, deep draft isolation, native editor cancellation, and mapped-input bypass during recording.
+- Independent cross-scope review verified launch paths remain data, application work runs outside input callbacks, and recording guard cleanup preserves consumed releases. Focus and held-key findings were fixed and reviewed.
+- Hosted Windows/Mac checks and physical OS configuration are separate gates. Native recording, dialogs, app launches, window actions and non-US layouts still require user verification; secure OS shortcuts cannot be guaranteed captured.
+
+
 ## Milestone 2 ? 0.1.1-beta.3
 
 - Local Windows validation: 24 Node tests, 32 Rust tests, formatting, Clippy with warnings denied, version consistency, and optimized Tauri build passed.

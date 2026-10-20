@@ -4,6 +4,53 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+## [0.1.1-beta.6]
+
+### Fixed
+
+- Initialize the QZ30 receiver before enabling button 4's separate input reports, so its saved action can replace the built-in Show Desktop shortcut.
+- Perform receiver setup outside engine/UI locks, validate completed acknowledgements, and show Preparing until button 4 is ready. Setup failures pause mappings with an error.
+- Restore the OEM default input mask on Pause, Default behavior and normal Quit; prepare the mode again after a detected receiver reconnect or mode reset.
+- Wait for Quit cleanup on a background task to keep the UI responsive.
+
+### Validation limits
+
+- A receiver-only physical test confirmed Show Desktop stops and thumb press/release reports arrive after initialization. Integrated beta.6 action execution and forced-exit/reconnect behavior require separate verification.
+
+## [0.1.1-beta.5]
+
+### Fixed
+
+- Release shared engine state before native dispatch so a slow input call cannot hold UI/status access hostage.
+- Prevent reentrant injection and stale suppression when a release arrives during dispatch.
+- Limit side-wheel desktop switching to one action per 250 ms.
+- Track accepted synthetic key events, check immediate partial-injection cleanup, and pause mappings on injection failures.
+- Delayed recovery never forces key-ups: uncertain pending keys require manual release before new injection.
+- Poll native foreground state during recording without waiting for Tauri's UI thread.
+
+### Validation limits
+
+- Beta.4 caused a reported hang and transient keyboard interference. These repairs address code hazards; the exact incident cause and repaired physical behavior remain unverified. The repaired app has not been started with live mappings.
+
+## [0.1.1-beta.4]
+
+### Added
+
+- Grouped action catalog: desktop switching, window controls, browser tabs, editing, media, zoom, and screenshot shortcuts.
+- Custom keyboard shortcuts with modifier/key selection and native focused-window recording.
+- Native application picker and application launch assignments.
+- Selectable QZ30 mouse markers and last-input highlighting.
+- Disable assignments for inputs whose native OS events can be suppressed.
+
+### Changed
+
+- Version 2 settings preserve legacy/version 1 assignments and make an exact backup before migration.
+- Application launch runs outside the input listener; asynchronous launch failures appear in status.
+
+### Validation limits
+
+- Physical Windows/Mac actions, native recording/dialog behavior, and OS shortcut configuration need user verification. Secure system shortcuts cannot be guaranteed recordable. Mac proprietary thumb input remains unavailable.
+
 - Dedicated Settings page for Launch at login and window behavior, separate from mouse assignments.
 
 ## [0.1.1-beta.3]

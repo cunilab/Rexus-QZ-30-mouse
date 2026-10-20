@@ -14,8 +14,10 @@ class Element {
     this.events = {};
     this.children = [];
     this.disabled = false;
-    this.classList = { toggle() {} };
+    const classes = new Set();
+    this.classList = { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); }, contains(name) { return classes.has(name); } };
   }
+  get options() { return this.children.flatMap((child) => child.children ? child.options : [child]); }
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   add(option) { this.children.push(option); }
@@ -57,6 +59,11 @@ function setup(invoke) {
       select.events.change();
     },
     click: (id) => document.getElementById(id).events.click(),
+    edit(id, value) {
+      const element = document.getElementById(id);
+      if (typeof value === "boolean") element.checked = value; else element.value = value;
+      element.events.change();
+    },
     startup(enabled) {
       const checkbox = document.getElementById("launch-at-login");
       checkbox.checked = enabled;
@@ -78,11 +85,17 @@ function nativeApp(initial = {}) {
   let failure = null;
   let saveFailure = null;
   let readGate = null;
+  let editorGate = null;
+  const editorResults = { record_shortcut: null, pick_application: null };
   const calls = [];
   const app = setup(async (command, args) => {
     calls.push(command);
     if (failure) throw new Error(failure);
     if (command === "get_status" && readGate) await readGate;
+    if (Object.hasOwn(editorResults, command)) {
+      if (editorGate) await editorGate;
+      return structuredClone(editorResults[command]);
+    }
     if (command === "save_mappings") {
       if (saveFailure) throw new Error(saveFailure);
       const active = Object.values(args.mappings).some((action) => action !== "default");
@@ -96,6 +109,12 @@ function nativeApp(initial = {}) {
     get status() { return status; },
     fail(message) { failure = message; },
     failSave(message) { saveFailure = message; },
+    editorResult(command, result) { editorResults[command] = result; },
+    holdEditor() {
+      let release;
+      editorGate = new Promise((resolve) => { release = resolve; });
+      return () => { editorGate = null; release(); };
+    },
     holdReads() {
       let release;
       readGate = new Promise((resolve) => { release = resolve; });
@@ -122,7 +141,7 @@ test("original numbering and actions follow native thumb availability", async ()
   const rows = app.get("mapping-rows").children;
   assert.deepEqual(rows.map((row) => row.children[0].textContent), ["1", "2", "3", "↑", "↓", "4"]);
   assert.equal(app.get("mapping-thumb").disabled, false);
-  const options = app.get("mapping-middle").children.map((option) => option.value);
+  const options = app.get("mapping-middle").options.map((option) => option.value);
   for (const action of ["task_view", "volume_up", "volume_down"]) assert(options.includes(action));
   app.change("wheel_right", "volume_up");
   app.click("save");
@@ -335,6 +354,16 @@ test("all-default saves work without a receiver and restore default behavior", a
   assert.equal(native.app.get("draft-state").textContent, "Saved locally");
 });
 
+test("thumb setup waits for receiver readiness before showing mappings active", async () => {
+  const native = nativeApp({ mapping_state: "preparing", hook_running: true });
+  await tick();
+  assert.equal(native.app.get("mapping-status").textContent, "Preparing button 4");
+  assert.match(native.app.get("mapping-detail").textContent, /receiver to confirm/);
+  Object.assign(native.status, { mapping_state: "active", enabled: true });
+  await native.app.poll();
+  assert.equal(native.app.get("mapping-status").textContent, "Mappings active");
+});
+
 test("unknown mapping state is not presented as active and permissions point to Save", async () => {
   const native = nativeApp({ platform: "macos", permission: "required", mapping_state: "future_state" });
   await tick();
@@ -370,4 +399,141 @@ test("Settings navigation preserves mapping drafts and changes no native setting
   assert.equal(app.get("controls-title").focused, true);
   assert.equal(app.get("mapping-back").value, "copy");
   assert.equal(app.get("draft-state").textContent, "Unsaved changes");
+});
+
+test("action menus group supported commands and use accurate platform labels", async () => {
+  const native = nativeApp();
+  await tick();
+  const menu = native.app.get("mapping-middle");
+  assert.deepEqual(menu.children.map((group) => group.label), ["Mouse", "Editing", "Desktop and windows", "Browser and tabs", "Media", "Zoom and capture", "Custom"]);
+  const values = menu.options.map((option) => option.value);
+  for (const value of ["disable", "cut", "previous_desktop", "next_desktop", "switch_apps", "minimize", "maximize", "previous_tab", "next_tab", "new_tab", "close_tab", "reopen_tab", "refresh", "mute", "play_pause", "previous_track", "next_track", "zoom_in", "zoom_out", "zoom_reset", "screenshot", "custom_shortcut", "launch_application"]) assert(values.includes(value), value);
+  assert.equal(menu.options.find((option) => option.value === "disable").disabled, false);
+  assert.equal(native.app.get("mapping-wheel_right").options.find((option) => option.value === "disable").hidden, true);
+  assert.equal(menu.options.find((option) => option.value === "maximize").label, "Maximize / restore window");
+  native.status.platform = "macos";
+  native.status.thumb_available = false;
+  await native.app.poll();
+  assert.equal(menu.options.find((option) => option.value === "maximize").label, "Toggle full screen");
+  assert.equal(native.app.get("mapping-wheel_right").options.find((option) => option.value === "disable").hidden, false);
+  assert.equal(native.app.get("shortcut-key").options.find((option) => option.value === "Insert").disabled, true);
+});
+
+test("mouse markers select accessible editors and show the last detected input", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.click("marker-back");
+  assert.equal(native.app.get("marker-back")["aria-pressed"], "true");
+  assert.equal(native.app.get("marker-middle")["aria-pressed"], "false");
+  assert.equal(native.app.get("row-back").classList.contains("selected"), true);
+  assert.equal(native.app.get("mapping-back").focused, true);
+  assert.equal(native.app.get("editor-title").textContent, "Back button action");
+  native.status.last_input = "Side wheel up";
+  await native.app.poll();
+  assert.equal(native.app.get("marker-wheel_right").classList.contains("last-input"), true);
+  assert.equal(native.app.get("row-wheel_right").classList.contains("last-input"), true);
+  native.status.last_input = "Thumb-rest button (4)";
+  await native.app.poll();
+  assert.equal(native.app.get("marker-wheel_right").classList.contains("last-input"), false);
+  assert.equal(native.app.get("marker-thumb").classList.contains("last-input"), true);
+  native.status.thumb_available = false;
+  await native.app.poll();
+  native.app.click("marker-thumb");
+  assert.equal(native.app.get("marker-back")["aria-pressed"], "true");
+});
+
+test("custom shortcut drafts are deeply isolated and compared structurally", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("back", "custom_shortcut");
+  assert.equal(native.app.get("shortcut-editor").hidden, false);
+  native.app.edit("shortcut-key", "KeyK");
+  native.app.edit("modifier-shift", true);
+  native.app.click("save");
+  await tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(native.status.mappings.back)), { custom_shortcut: { key: "KeyK", modifiers: ["control", "shift"] } });
+  assert.equal(native.app.get("save").disabled, true);
+  native.status.mappings.back = { custom_shortcut: { modifiers: ["shift", "control"], key: "KeyK" } };
+  await native.app.poll();
+  assert.equal(native.app.get("draft-state").textContent, "Saved locally");
+  assert.equal(native.app.get("save").disabled, true);
+  native.app.edit("shortcut-key", "F2");
+  assert.equal(native.status.mappings.back.custom_shortcut.key, "KeyK");
+  native.failSave("Could not activate shortcut");
+  native.app.click("save");
+  await tick();
+  assert.equal(native.app.get("shortcut-key").value, "F2");
+  assert.equal(native.app.get("draft-state").textContent, "Unsaved changes");
+  assert.equal(native.status.mappings.back.custom_shortcut.key, "KeyK");
+});
+
+test("recorder blocks saving until completion and returns only a draft", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("middle", "custom_shortcut");
+  native.editorResult("record_shortcut", { custom_shortcut: { key: "KeyP", modifiers: ["control", "alt"] } });
+  const release = native.holdEditor();
+  native.app.click("record-shortcut");
+  assert.equal(native.app.get("save").disabled, true);
+  assert.equal(native.app.get("shortcut-key").disabled, true);
+  assert.equal(native.app.get("marker-back").disabled, true);
+  assert.match(native.app.get("editor-hint").textContent, /Escape cancels/);
+  native.app.click("save");
+  assert(!native.calls.includes("save_mappings"));
+  release();
+  await tick();
+  assert.equal(native.app.get("shortcut-key").value, "KeyP");
+  assert.equal(native.app.get("modifier-alt").checked, true);
+  assert.equal(native.status.mappings.middle, "default");
+  assert.equal(native.app.get("save").disabled, false);
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.mappings.middle.custom_shortcut.key, "KeyP");
+});
+
+test("recorder cancel or failure preserves an existing shortcut draft", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("middle", "custom_shortcut");
+  native.app.edit("shortcut-key", "F3");
+  native.app.click("record-shortcut");
+  await tick();
+  assert.equal(native.app.get("shortcut-key").value, "F3");
+  assert.match(native.app.get("message").textContent, /Canceled/);
+  native.fail("Recorder unavailable");
+  native.app.click("record-shortcut");
+  await tick();
+  assert.equal(native.app.get("shortcut-key").value, "F3");
+  assert.match(native.app.get("message").textContent, /Recorder unavailable/);
+});
+
+test("application picker requires a choice and preserves saved paths on cancel", async () => {
+  const native = nativeApp();
+  await tick();
+  native.app.change("forward", "launch_application");
+  assert.equal(native.app.get("application-editor").hidden, false);
+  assert.equal(native.app.get("save").disabled, true);
+  native.editorResult("pick_application", "C:\\Program Files\\Example\\example.exe");
+  native.app.click("pick-application");
+  await tick();
+  assert.equal(native.app.get("application-path").value, "C:\\Program Files\\Example\\example.exe");
+  assert.equal(native.app.get("save").disabled, false);
+  native.app.click("save");
+  await tick();
+  assert.equal(native.status.mappings.forward.launch_application.path, "C:\\Program Files\\Example\\example.exe");
+  assert.equal(native.app.get("save").disabled, true);
+  native.editorResult("pick_application", null);
+  native.app.click("pick-application");
+  await tick();
+  assert.equal(native.app.get("application-path").value, "C:\\Program Files\\Example\\example.exe");
+  assert.equal(native.app.get("save").disabled, true);
+});
+
+test("preview custom editors keep native recorder and picker unavailable", () => {
+  const app = setup();
+  app.change("middle", "custom_shortcut");
+  assert.equal(app.get("record-shortcut").disabled, true);
+  app.change("middle", "launch_application");
+  assert.equal(app.get("pick-application").disabled, true);
+  assert.equal(app.get("save").disabled, true);
 });

@@ -1,6 +1,6 @@
 # QZ Flow Roadmap
 
-Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0, 1, and 2 are implemented; native lifecycle verification limits are recorded below.
+Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0, 1, and 2 are implemented; Milestone 3 is blocked on input-safety validation; native lifecycle verification limits are recorded below.
 
 ## Goal
 
@@ -101,13 +101,13 @@ Settings use a versioned envelope with a persistent Pause preference. Legacy ass
 
 ## Milestone 3 — Expanded actions and button editor
 
-Status: planned; depends on Milestone 2.
+Status: implementation complete, with a beta.4 native-input regression reported. Beta.5 automated Windows/Mac checks passed; native safety acceptance remains open. Beta.6 adds verified receiver initialization for button4; its integrated action and lifecycle checks are tracked in docs/VALIDATION.md. Named shortcuts depend on OS/app configuration; recording cannot intercept secure system shortcuts.
 
-- [ ] Group dropdown choices by purpose.
-- [ ] Add custom keyboard shortcut recording, with clear modifier labels for each OS.
-- [ ] Add separate Default behavior and Disable button choices where supported.
-- [ ] Make the existing QZ30 diagram selectable; highlight detected inputs.
-- [ ] Add application launch actions through a native application picker.
+- [x] Group dropdown choices by purpose.
+- [x] Add custom keyboard shortcut recording, with clear modifier labels for each OS.
+- [x] Add separate Default behavior and Disable button choices where supported.
+- [x] Make the existing QZ30 diagram selectable; highlight detected inputs.
+- [x] Add application launch actions through a native application picker.
 
 Action catalog:
 
@@ -127,6 +127,8 @@ Acceptance:
 - Shortcut recording does not execute the captured shortcut in another app.
 - Default preserves native input; Disable suppresses it only where supported.
 - OS-configurable shortcuts and app-dependent actions are documented and checked against the test machine's settings.
+
+Implementation and test guidance: [Action behavior](docs/ACTIONS.md). The shared editor keeps custom shortcuts and application choices as drafts until Save. Keyboard recording requires a focused QZ Flow window, cancels with Escape/focus loss/timeout, and drains captured releases. Secure OS shortcuts are excluded from capture guarantees; use the manual key/modifier editor for reserved chords. Disable is unavailable for Windows raw receiver wheel/thumb inputs.
 
 ## Milestone 4 — Side-wheel modes and profiles
 
