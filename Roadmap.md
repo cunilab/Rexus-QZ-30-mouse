@@ -1,6 +1,6 @@
 # QZ Flow Roadmap
 
-Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0, 1, and 2 are implemented; Milestone 3 implementation is available for validation; native lifecycle verification limits are recorded below.
+Approved scope: 19 October 2026, including update prompts, trunk-based development, and GitHub Actions/releases. Milestones 0, 1, and 2 are implemented; Milestone 3 is blocked on input-safety validation; native lifecycle verification limits are recorded below.
 
 ## Goal
 
@@ -101,7 +101,7 @@ Settings use a versioned envelope with a persistent Pause preference. Legacy ass
 
 ## Milestone 3 — Expanded actions and button editor
 
-Status: implemented in 0.1.1-beta.4, pending hosted CI and physical Windows/Mac validation. Named shortcuts depend on OS/app configuration; recording cannot intercept secure system shortcuts.
+Status: implementation complete, with a beta.4 native-input regression reported. Beta.5 repairs require hosted CI and physical Windows/Mac validation before acceptance. Named shortcuts depend on OS/app configuration; recording cannot intercept secure system shortcuts.
 
 - [x] Group dropdown choices by purpose.
 - [x] Add custom keyboard shortcut recording, with clear modifier labels for each OS.

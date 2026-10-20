@@ -1,5 +1,12 @@
 # Validation — first desktop slice
 
+## Beta.5 input safety repair
+
+The user reported Not responding and keyboard interference while using the wheel/buttons in beta.4. Keyboard behavior returned to normal after closing QZ Flow. This invalidates any inference of native safety from the earlier unit/build checks. [Incident and REA comparison](../analysis/INPUT-INCIDENT.md) distinguishes confirmed code hazards from the unresolved incident cause.
+
+Local repair validation: 32 Node tests and 53 Windows Rust tests passed, along with formatting, version consistency, and Clippy with warnings denied. Independent review passed after delayed-recovery and reentrant-release fixes. Repair tests use fake native senders and reentrant callbacks, without installing hooks or injecting real input. The repaired app is kept closed; saved mappings are paused with a backup for recovery. Physical Windows/Mac verification remains outstanding.
+
+
 ## Milestone 3 ? 0.1.1-beta.4
 
 - Local Windows checks: 32 Node tests and 44 Rust tests passed, with version consistency, formatting and Clippy warnings denied. Optimized native build is checked separately from physical input execution.

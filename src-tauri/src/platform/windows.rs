@@ -2,11 +2,12 @@ use crate::{
     engine::{Action, Input},
     Device, Shared,
 };
+mod keyboard;
 mod trace;
 use std::{
     mem::size_of,
     ptr::null_mut,
-    sync::{atomic::Ordering, mpsc, Arc, OnceLock},
+    sync::{atomic::Ordering, mpsc, Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
 };
 pub use trace::trace_buttons;
@@ -16,7 +17,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 use windows_sys::Win32::{
     Foundation::{
         CloseHandle, GetLastError, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE, LPARAM, LRESULT,
-        WPARAM,
+        POINT, WPARAM,
     },
     System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
     UI::{
@@ -30,6 +31,71 @@ use windows_sys::Win32::{
 
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
 const INJECTED_TAG: usize = 0x515A464C;
+static INJECTED_KEYS: Mutex<keyboard::Keyboard> = Mutex::new(keyboard::Keyboard::new());
+
+fn send_inputs(inputs: &[INPUT]) -> usize {
+    unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            size_of::<INPUT>() as i32,
+        ) as usize
+    }
+}
+
+fn injected_key_is_up(virtual_key: u16, scan: u16, flags: u32) -> Option<bool> {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.is_null()
+            || GetCursorPos(&mut POINT::default()) == 0
+            || flags & KEYEVENTF_UNICODE != 0
+        {
+            return None;
+        }
+        let key = if flags & KEYEVENTF_SCANCODE != 0 {
+            let foreground_thread = GetWindowThreadProcessId(foreground, null_mut());
+            let layout = GetKeyboardLayout(foreground_thread);
+            if layout.is_null() {
+                return None;
+            }
+            let scan = scan as u32
+                | if flags & KEYEVENTF_EXTENDEDKEY != 0 {
+                    0xe000
+                } else {
+                    0
+                };
+            MapVirtualKeyExW(scan, MAPVK_VSC_TO_VK_EX, layout)
+        } else {
+            virtual_key as u32
+        };
+        if !(1..=254).contains(&key) {
+            return None;
+        }
+        Some(GetAsyncKeyState(key as i32) >= 0)
+    }
+}
+
+fn pause_keyboard_error(shared: &Shared, error: &str) {
+    let mut engine = shared.engine.lock().unwrap_or_else(|e| e.into_inner());
+    engine.enabled = false;
+    engine.paused = true;
+    engine.error = Some(error.into());
+}
+
+fn keyboard_result(result: Result<(), String>) -> Result<(), String> {
+    if let (Err(error), Some(shared)) = (&result, SHARED.get()) {
+        pause_keyboard_error(shared, error);
+    }
+    result
+}
+
+pub fn release_injected() -> Result<(), String> {
+    let result = INJECTED_KEYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .recover(&mut injected_key_is_up);
+    keyboard_result(result)
+}
 
 pub fn devices() -> Result<Vec<Device>, String> {
     unsafe {
@@ -595,6 +661,12 @@ fn perform(action: Action) -> Result<(), String> {
     } else {
         None
     };
+    let mut keyboard = INJECTED_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+    // Pending keys must already be manually released; delayed key-ups could release physical keys.
+    if let Err(error) = keyboard.recover(&mut injected_key_is_up) {
+        drop(keyboard);
+        return keyboard_result(Err(error));
+    }
     unsafe {
         let mut held_keys = keys.clone();
         if let Some(scan) = scan {
@@ -621,27 +693,10 @@ fn perform(action: Action) -> Result<(), String> {
         }
         let mut inputs = shortcut_inputs(&keys, scan, false);
         inputs.extend(shortcut_inputs(&keys, scan, true));
-        let sent = SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
-            size_of::<INPUT>() as i32,
-        );
-        if sent != inputs.len() as u32 {
-            if sent > 0 {
-                let releases = shortcut_inputs(&keys, scan, true);
-                SendInput(
-                    releases.len() as u32,
-                    releases.as_ptr(),
-                    size_of::<INPUT>() as i32,
-                );
-            }
-            return Err(
-                "Windows rejected the shortcut. An elevated application may be blocking input."
-                    .into(),
-            );
-        }
+        let result = keyboard.send(&inputs, &mut send_inputs, &mut injected_key_is_up);
+        drop(keyboard);
+        keyboard_result(result)
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -756,5 +811,20 @@ mod tests {
             assert_eq!(up[1].Anonymous.ki.wVk, VK_CONTROL);
             assert_eq!(up[1].Anonymous.ki.dwFlags, KEYEVENTF_KEYUP);
         }
+    }
+    #[test]
+    fn injection_failure_pauses_actual_engine_without_changing_assignments() {
+        let shared = Shared::default();
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.back = Action::Copy;
+        }
+        pause_keyboard_error(&shared, "Pending key release");
+        let engine = shared.engine.lock().unwrap();
+        assert!(engine.paused);
+        assert!(!engine.enabled);
+        assert_eq!(engine.mappings.back, Action::Copy);
+        assert_eq!(engine.error.as_deref(), Some("Pending key release"));
     }
 }

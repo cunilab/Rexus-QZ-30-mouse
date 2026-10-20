@@ -4,6 +4,21 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+## [0.1.1-beta.5]
+
+### Fixed
+
+- Release shared engine state before native dispatch so a slow input call cannot hold UI/status access hostage.
+- Prevent reentrant injection and stale suppression when a release arrives during dispatch.
+- Limit side-wheel desktop switching to one action per 250 ms.
+- Track accepted synthetic key events, check immediate partial-injection cleanup, and pause mappings on injection failures.
+- Delayed recovery never forces key-ups: uncertain pending keys require manual release before new injection.
+- Poll native foreground state during recording without waiting for Tauri's UI thread.
+
+### Validation limits
+
+- Beta.4 caused a reported hang and transient keyboard interference. These repairs address code hazards; the exact incident cause and repaired physical behavior remain unverified. The repaired app has not been started with live mappings.
+
 ## [0.1.1-beta.4]
 
 ### Added

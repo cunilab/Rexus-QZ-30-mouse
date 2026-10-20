@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -42,6 +42,8 @@ pub struct Shared {
     hook_running: AtomicBool,
     stopping: AtomicBool,
     recording: AtomicBool,
+    processing: AtomicBool,
+    dispatch_releases: AtomicU8,
 }
 
 impl Shared {
@@ -67,30 +69,59 @@ impl Shared {
     }
 
     fn process(&self, input: Input, down: bool, perform: fn(Action) -> Result<(), String>) -> bool {
-        // This lock never spans filesystem work, inventory calls, or UI operations.
+        let action = {
+            let mut engine = self.engine.lock().unwrap_or_else(|e| e.into_inner());
+            if self.stopping.load(Ordering::Acquire) {
+                engine.enabled = false;
+            }
+            if !down {
+                if self.processing.load(Ordering::Acquire) {
+                    self.dispatch_releases
+                        .fetch_or(input.button_bit(), Ordering::AcqRel);
+                }
+                engine.action(input, false);
+                return engine.suppress_release(input);
+            }
+            if engine.is_suppressed(input) {
+                return true;
+            }
+            if self.recording.load(Ordering::Acquire) {
+                engine.action(input, false);
+                return false;
+            }
+            let action = engine.action(input, true);
+            if action == Action::Default {
+                return false;
+            }
+            if engine.navigation_throttled(input, &action, std::time::Instant::now()) {
+                return true;
+            }
+            if self
+                .processing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return false;
+            }
+            self.dispatch_releases.store(0, Ordering::Release);
+            engine.error = None;
+            action
+        };
+        struct Dispatch<'a>(&'a AtomicBool);
+        impl Drop for Dispatch<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _dispatch = Dispatch(&self.processing);
+        // Native input can pump messages; neither UI status nor reentrant input may wait on this call.
+        let result = perform(action);
         let mut engine = self.engine.lock().unwrap_or_else(|e| e.into_inner());
-        if self.stopping.load(Ordering::Acquire) {
-            engine.enabled = false;
-        }
-        if !down {
-            engine.action(input, false);
-            return engine.suppress_release(input);
-        }
-        if engine.is_suppressed(input) {
-            return true;
-        }
-        if self.recording.load(Ordering::Acquire) {
-            engine.action(input, false);
-            return false;
-        }
-        let action = engine.action(input, true);
-        if action == Action::Default {
-            return false;
-        }
-        match perform(action) {
+        match result {
             Ok(()) => {
-                engine.suppress_press(input);
-                engine.error = None;
+                if self.dispatch_releases.load(Ordering::Acquire) & input.button_bit() == 0 {
+                    engine.suppress_press(input);
+                }
                 true
             }
             Err(error) => {
@@ -382,6 +413,69 @@ mod tests {
         assert!(shared.process(Input::Middle, false, |_| Ok(())));
         shared.recording.store(false, Ordering::Release);
         assert!(shared.process(Input::Back, true, |_| Ok(())));
+    }
+
+    thread_local! {
+        static DISPATCH_TEST: std::cell::RefCell<Option<Arc<Shared>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    #[test]
+    fn native_dispatch_can_read_status_and_reenter_without_holding_engine_lock() {
+        let shared = Arc::new(Shared::default());
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.back = Action::Copy;
+        }
+        DISPATCH_TEST.with(|slot| *slot.borrow_mut() = Some(shared.clone()));
+        assert!(shared.process(Input::Back, true, |_| {
+            DISPATCH_TEST.with(|slot| {
+                let slot = slot.borrow();
+                let shared = slot.as_ref().unwrap();
+                assert!(
+                    shared.engine.try_lock().is_ok(),
+                    "Native dispatch must release the engine lock"
+                );
+                let _status = shared.status();
+                assert!(!shared.process(Input::Back, true, |_| panic!(
+                    "Reentrant input must not inject"
+                )));
+                shared.engine.lock().unwrap().enabled = false;
+            });
+            Ok(())
+        }));
+        assert!(!shared.processing.load(Ordering::Acquire));
+        assert!(shared.process(Input::Back, false, |_| panic!("Release must not inject")));
+        DISPATCH_TEST.with(|slot| slot.borrow_mut().take());
+    }
+
+    #[test]
+    fn release_during_native_dispatch_cannot_leave_suppression_for_the_next_press() {
+        let shared = Arc::new(Shared::default());
+        {
+            let mut engine = shared.engine.lock().unwrap();
+            engine.enabled = true;
+            engine.mappings.thumb = Action::Copy;
+        }
+        DISPATCH_TEST.with(|slot| *slot.borrow_mut() = Some(shared.clone()));
+        assert!(shared.process(Input::Thumb, true, |_| {
+            DISPATCH_TEST.with(|slot| {
+                assert!(!slot
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .process(Input::Thumb, false, |_| panic!("Release must not inject")));
+            });
+            Ok(())
+        }));
+        assert!(!shared.engine.lock().unwrap().is_suppressed(Input::Thumb));
+        fn next_press(_: Action) -> Result<(), String> {
+            Ok(())
+        }
+        assert!(shared.process(Input::Thumb, true, next_press));
+        assert!(shared.engine.lock().unwrap().is_suppressed(Input::Thumb));
+        assert!(shared.process(Input::Thumb, false, next_press));
+        DISPATCH_TEST.with(|slot| slot.borrow_mut().take());
     }
 
     #[test]

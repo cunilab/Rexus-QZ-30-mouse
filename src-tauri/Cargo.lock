@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "qz-flow"
-version = "0.1.1-beta.4"
+version = "0.1.1-beta.5"
 dependencies = [
  "objc2",
  "objc2-app-kit",

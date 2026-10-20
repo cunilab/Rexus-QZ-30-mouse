@@ -181,7 +181,7 @@ impl Input {
         }
     }
 
-    fn button_bit(self) -> u8 {
+    pub fn button_bit(self) -> u8 {
         match self {
             Self::Back => 1,
             Self::Forward => 2,
@@ -200,6 +200,7 @@ pub struct Engine {
     pub last_input: Option<String>,
     pub error: Option<String>,
     suppressed: u8,
+    navigation_at: Option<std::time::Instant>,
 }
 
 impl Engine {
@@ -210,6 +211,26 @@ impl Engine {
         } else {
             Action::Default
         }
+    }
+
+    pub fn navigation_throttled(
+        &mut self,
+        input: Input,
+        action: &Action,
+        now: std::time::Instant,
+    ) -> bool {
+        if !matches!(input, Input::WheelLeft | Input::WheelRight)
+            || !matches!(action, Action::PreviousDesktop | Action::NextDesktop)
+        {
+            return false;
+        }
+        if self.navigation_at.is_some_and(|last| {
+            now.saturating_duration_since(last) < std::time::Duration::from_millis(250)
+        }) {
+            return true;
+        }
+        self.navigation_at = Some(now);
+        false
     }
 
     pub fn suppress_press(&mut self, input: Input) {
@@ -235,6 +256,25 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_wheel_navigation_is_bounded_without_throttling_other_actions() {
+        let mut engine = Engine::default();
+        let now = std::time::Instant::now();
+        assert!(!engine.navigation_throttled(Input::WheelLeft, &Action::PreviousDesktop, now));
+        assert!(engine.navigation_throttled(
+            Input::WheelRight,
+            &Action::NextDesktop,
+            now + std::time::Duration::from_millis(249)
+        ));
+        assert!(!engine.navigation_throttled(
+            Input::WheelRight,
+            &Action::NextDesktop,
+            now + std::time::Duration::from_millis(250)
+        ));
+        assert!(!engine.navigation_throttled(Input::WheelLeft, &Action::VolumeDown, now));
+        assert!(!engine.navigation_throttled(Input::Back, &Action::PreviousDesktop, now));
+    }
 
     #[test]
     fn disabled_and_default_inputs_pass_through() {

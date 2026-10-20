@@ -21,8 +21,22 @@ pub fn record(app: &AppHandle) -> Result<Option<Action>, String> {
     if !window.is_focused().unwrap_or(false) {
         return Err("Open and focus QZ Flow before recording a shortcut.".into());
     }
-    let result = native::record(|| window.is_focused().unwrap_or(false))?;
-    if window.is_focused().unwrap_or(false) {
+    #[cfg(windows)]
+    let focused = {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("Cannot identify the recording window: {error}"))?;
+        move || unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd.0
+        }
+    };
+    #[cfg(target_os = "macos")]
+    let focused = native::application_is_frontmost;
+    if !focused() {
+        return Ok(None);
+    }
+    let result = native::record(focused)?;
+    if focused() {
         Ok(result)
     } else {
         Ok(None)
@@ -352,6 +366,30 @@ mod native {
         fn CFRelease(value: Ref);
         static kCFRunLoopCommonModes: Ref;
         static kCFRunLoopDefaultMode: Ref;
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct ProcessSerialNumber {
+        high: u32,
+        low: u32,
+    }
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn GetFrontProcess(process: *mut ProcessSerialNumber) -> i32;
+        fn GetProcessPID(process: *const ProcessSerialNumber, pid: *mut i32) -> i32;
+    }
+
+    // Read WindowServer process state directly; the recorder must never wait on Tauri's UI thread.
+    pub fn application_is_frontmost() -> bool {
+        let mut process = ProcessSerialNumber::default();
+        let mut pid = 0;
+        unsafe {
+            GetFrontProcess(&mut process) == 0
+                && GetProcessPID(&process, &mut pid) == 0
+                && pid == std::process::id() as i32
+        }
     }
 
     fn key(key: u16) -> (Option<&'static str>, Option<&'static str>) {

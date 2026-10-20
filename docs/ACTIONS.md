@@ -18,7 +18,7 @@ The editor keeps changes as a draft until **Save and apply**. Existing mappings 
 | Screenshot | Win+Shift+S | Command+Shift+3 |
 | Media | Native Windows media keys | Native AppKit media events |
 
-Browser/tab/zoom commands follow the foreground application's shortcuts. Window commands target the foreground window. Mac full screen and Windows maximize have different behavior and labels. Desktop switching needs multiple desktops/Spaces and enabled OS shortcuts. Check the machine's Mission Control settings and each target application's shortcuts before relying on them. Standard combinations are referenced in [Microsoft's shortcut guide](https://support.microsoft.com/en-au/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec); Mac media identifiers follow [Apple's published HID definitions](https://github.com/apple-oss-distributions/IOHIDFamily/blob/main/IOHIDSystem/IOKit/hidsystem/ev_keymap.h).
+Browser/tab/zoom commands follow the foreground application's shortcuts. Window commands target the foreground window. Mac full screen and Windows maximize have different behavior and labels. Desktop switching needs multiple desktops/Spaces and enabled OS shortcuts. Side-wheel desktop switching is limited to one step per 250 ms so rapid rotation cannot flood system navigation. Check the machine's Mission Control settings and each target application's shortcuts before relying on them. Standard combinations are referenced in [Microsoft's shortcut guide](https://support.microsoft.com/en-au/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec); Mac media identifiers follow [Apple's published HID definitions](https://github.com/apple-oss-distributions/IOHIDFamily/blob/main/IOHIDSystem/IOKit/hidsystem/ev_keymap.h).
 
 ## Record a shortcut
 
@@ -35,3 +35,8 @@ Choose **Launch application**, then **Choose application**. Windows accepts an e
 **Default behavior** passes native input through. **Disable button** consumes OS-hook events. It is offered for Middle, Back, and Forward on Windows; raw receiver wheel/thumb input cannot be reliably suppressed. Mac supports OS mouse/scroll events but has no verified thumb-rest support.
 
 Verify one assignment at a time with the original mouse utility closed: desktop switching with two desktops, a tab/editing action in a disposable document, media controls, and launch of a known application. Confirm one action per press, paired key release, Pause/Resume, disconnect/reconnect, and Quit. Native dialogs, recording, and physical Windows/Mac execution are separate from unit/build checks; they are not claimed as verified by compilation.
+
+
+## Input failure recovery
+
+If Windows accepts only part of a shortcut, QZ Flow accounts for those inserted events and checks immediate release recovery. A failure pauses mappings for the current session. It does not force delayed key-up events, since a key may now be physically held. Follow the displayed instruction to press and release Ctrl, Alt, Shift and Windows, then resume only when typing is normal. Failed cleanup blocks new injection until the pending keys are confirmed released. Forced process termination cannot guarantee cleanup. Native runtime verification is still required for beta.5; a passing fake-sender test is not a hardware pass.

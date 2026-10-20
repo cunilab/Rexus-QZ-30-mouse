@@ -87,6 +87,15 @@ fn stop_state(state: &AppState) {
         .unwrap_or_else(|error| error.into_inner())
         .enabled = false;
     hook.take();
+    #[cfg(windows)]
+    if let Err(error) = crate::platform::release_injected() {
+        state
+            .shared
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .error = Some(error);
+    }
     state
         .shared
         .engine
