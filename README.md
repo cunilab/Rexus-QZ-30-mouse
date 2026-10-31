@@ -39,7 +39,7 @@ Linux reads the receiver's `/dev/input/event*` device and re-emits all unmapped 
 3. Button 4 (thumb rest), shortcut recording and window actions are unavailable. Choose keys manually for custom shortcuts. **Choose application** needs `zenity` or `kdialog`.
 4. The tray icon needs an AppIndicator-capable desktop (GNOME needs the AppIndicator extension). Without a tray, start QZ Flow again to reopen its window. Launch at login writes `~/.config/autostart/dev.qzflow.desktop`.
 
-Linux builds and unit tests run in GitHub Actions; real receiver behavior on Linux is unverified. Linux cannot see physically held keyboard modifiers, so a held Ctrl/Alt/Shift/Super combines with an injected shortcut instead of bypassing it.
+Linux builds and unit tests run in GitHub Actions; real receiver behavior on Linux is unverified. Linux cannot see physically held keyboard modifiers, so a held Ctrl/Alt/Shift/Super combines with an injected shortcut instead of bypassing it, and on X11 the injected Ctrl/Alt/Shift/Super release can release a modifier you are physically holding. Only key and relative-motion events are mirrored by the virtual mouse; absolute-axis, LED and switch events on the grabbed receiver node are not. Programs started from an AppImage build do not inherit the AppImage's library environment.
 
 ## Build and run
 

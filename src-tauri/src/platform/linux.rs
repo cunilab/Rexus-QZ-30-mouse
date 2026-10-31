@@ -13,7 +13,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, OnceLock,
+        mpsc, Arc, Mutex, OnceLock,
     },
     thread::{self, JoinHandle},
 };
@@ -26,6 +26,21 @@ const UINPUT: &str = "/dev/uinput";
 const VIRTUAL_PREFIX: &str = "QZ Flow virtual";
 const MOUSE_NAME: &str = "QZ Flow virtual mouse";
 const KEYBOARD_NAME: &str = "QZ Flow virtual keyboard";
+// Variables an AppImage injects for itself; launched programs must not inherit them.
+const APPIMAGE_ENV: [&str; 12] = [
+    "APPIMAGE",
+    "APPDIR",
+    "ARGV0",
+    "OWD",
+    "LD_LIBRARY_PATH",
+    "GTK_PATH",
+    "GIO_MODULE_DIR",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GSETTINGS_SCHEMA_DIR",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "QT_PLUGIN_PATH",
+];
 const SETUP_HINT: &str = "Install packaging/linux/70-qz-flow.rules as described in the README, replug the receiver, then sign out and in.";
 
 struct Node {
@@ -148,6 +163,34 @@ impl Drop for Hook {
 struct Pair {
     device: evdev::Device,
     mouse: VirtualDevice,
+    wheel: Wheel,
+}
+
+// Horizontal wheel state: devices with the legacy axis trigger on it; hi-res-only devices
+// accumulate toward one 120-unit notch, since a multiplier can split a notch across reports.
+struct Wheel {
+    legacy: bool,
+    hi_res: i32,
+}
+
+// Cleanup that must also run if the reader thread panics, or status would stay "active".
+struct Reader<'a> {
+    shared: &'a Shared,
+    pairs: Vec<Pair>,
+}
+
+impl Drop for Reader<'_> {
+    fn drop(&mut self) {
+        for pair in &mut self.pairs {
+            let _ = pair.device.ungrab();
+        }
+        self.shared.hook_running.store(false, Ordering::Release);
+        self.shared
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enabled = false;
+    }
 }
 
 fn uinput_error(error: std::io::Error) -> String {
@@ -180,7 +223,14 @@ fn open_pair(path: &Path) -> Result<Pair, String> {
         builder = builder.with_msc(misc).map_err(uinput_error)?;
     }
     let mouse = builder.build().map_err(uinput_error)?;
-    Ok(Pair { device, mouse })
+    let legacy = device
+        .supported_relative_axes()
+        .is_some_and(|axes| axes.contains(RelativeAxisCode::REL_HWHEEL));
+    Ok(Pair {
+        device,
+        mouse,
+        wheel: Wheel { legacy, hi_res: 0 },
+    })
 }
 
 fn virtual_keyboard() -> Result<VirtualDevice, String> {
@@ -227,27 +277,28 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
             .map_err(|error| format!("Could not take exclusive control of the receiver ({error}). Another program may be using it."))?;
     }
     *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(keyboard);
-    shared.hook_running.store(true, Ordering::Release);
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
+    let thread_shared = shared.clone();
+    let (go, wait) = mpsc::channel::<()>();
     let join = thread::Builder::new()
         .name("qz-evdev".into())
         .spawn(move || {
-            run(&shared, &thread_stop, &mut pairs);
-            for pair in &mut pairs {
-                let _ = pair.device.ungrab();
+            let mut reader = Reader {
+                shared: &thread_shared,
+                pairs,
+            };
+            // Started only once hook_running is set, so this thread's exit cannot be overwritten.
+            if wait.recv().is_ok() {
+                run(reader.shared, &thread_stop, &mut reader.pairs);
             }
-            shared.hook_running.store(false, Ordering::Release);
-            shared
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .enabled = false;
         })
         .map_err(|error| {
             *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
             format!("Could not start the input listener: {error}")
         })?;
+    shared.hook_running.store(true, Ordering::Release);
+    let _ = go.send(());
     Ok(Hook {
         stop,
         join: Some(join),
@@ -280,7 +331,11 @@ fn run(shared: &Shared, stop: &AtomicBool, pairs: &mut [Pair]) {
             if fd.revents & libc::POLLIN == 0 {
                 continue;
             }
-            let Pair { device, mouse } = pair;
+            let Pair {
+                device,
+                mouse,
+                wheel,
+            } = pair;
             let events = match device.fetch_events() {
                 Ok(events) => events,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
@@ -291,8 +346,9 @@ fn run(shared: &Shared, stop: &AtomicBool, pairs: &mut [Pair]) {
                     batch.push(event);
                     continue;
                 }
-                let output =
-                    filter_batch(&batch, |input, down| shared.process(input, down, perform));
+                let output = filter_batch(&batch, wheel, |input, down| {
+                    shared.process(input, down, perform)
+                });
                 batch.clear();
                 if !output.is_empty() && mouse.emit(&output).is_err() {
                     return;
@@ -324,8 +380,7 @@ fn is_horizontal_wheel(event: &InputEvent) -> bool {
         .contains(&event.code())
 }
 
-// A notch reports legacy and hi-res events together, so decide once per report.
-fn wheel_input(batch: &[InputEvent]) -> Option<Input> {
+fn wheel_input(batch: &[InputEvent], wheel: &mut Wheel) -> Option<Input> {
     let sum = |code: u16| {
         batch
             .iter()
@@ -333,11 +388,18 @@ fn wheel_input(batch: &[InputEvent]) -> Option<Input> {
             .map(InputEvent::value)
             .sum::<i32>()
     };
-    let hi_res = sum(RelativeAxisCode::REL_HWHEEL_HI_RES.0);
-    let delta = if hi_res != 0 {
-        hi_res
-    } else {
+    let delta = if wheel.legacy {
         sum(RelativeAxisCode::REL_HWHEEL.0)
+    } else {
+        let hi_res = sum(RelativeAxisCode::REL_HWHEEL_HI_RES.0);
+        if hi_res.signum() == -wheel.hi_res.signum() {
+            wheel.hi_res = 0; // A reversal starts a new notch.
+        }
+        wheel.hi_res += hi_res;
+        if wheel.hi_res.abs() < 120 {
+            return None;
+        }
+        std::mem::take(&mut wheel.hi_res)
     };
     match delta.signum() {
         1 => Some(Input::WheelRight),
@@ -349,12 +411,15 @@ fn wheel_input(batch: &[InputEvent]) -> Option<Input> {
 // Everything is forwarded unchanged except events consumed by a mapped input.
 fn filter_batch(
     batch: &[InputEvent],
+    wheel: &mut Wheel,
     mut process: impl FnMut(Input, bool) -> bool,
 ) -> Vec<InputEvent> {
-    let drop_wheel = wheel_input(batch).is_some_and(|input| process(input, true));
+    let triggered = wheel_input(batch, wheel);
+    let drop_wheel = triggered.is_some_and(|input| process(input, true));
     batch
         .iter()
         .filter(|event| {
+            // Hi-res reports that did not complete a notch are forwarded unchanged.
             if is_horizontal_wheel(event) {
                 return !drop_wheel;
             }
@@ -611,7 +676,13 @@ fn launch(path: String) -> Result<(), String> {
         .name("qz-launch".into())
         .spawn(move || {
             let result = validate_application(&path).and_then(|_| {
-                Command::new(&path)
+                let mut command = Command::new(&path);
+                if std::env::var_os("APPIMAGE").is_some() {
+                    for name in APPIMAGE_ENV {
+                        command.env_remove(name);
+                    }
+                }
+                command
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -650,9 +721,13 @@ fn press(keys: &[u16]) -> Result<(), String> {
     let pressed = keyboard.emit(&events(&mut keys.iter(), 1));
     // Always attempt the releases so a failed press cannot leave a key stuck down.
     let released = keyboard.emit(&events(&mut keys.iter().rev(), 0));
-    pressed
-        .and(released)
-        .map_err(|error| format!("Linux could not inject the shortcut: {error}"))
+    let result = pressed.and(released);
+    if result.is_err() {
+        // Destroying the uinput device makes the kernel release any key still held on it.
+        *guard = None;
+        *guard = virtual_keyboard().ok();
+    }
+    result.map_err(|error| format!("Linux could not inject the shortcut: {error}"))
 }
 
 fn perform(action: Action) -> Result<(), String> {
@@ -676,6 +751,12 @@ mod tests {
     }
     fn rel(code: RelativeAxisCode, value: i32) -> InputEvent {
         InputEvent::new(EventType::RELATIVE.0, code.0, value)
+    }
+    fn legacy() -> Wheel {
+        Wheel {
+            legacy: true,
+            hi_res: 0,
+        }
     }
     fn codes(events: &[InputEvent]) -> Vec<(u16, u16)> {
         events
@@ -740,12 +821,15 @@ mod tests {
             rel(RelativeAxisCode::REL_HWHEEL_HI_RES, -120),
             rel(RelativeAxisCode::REL_HWHEEL, -1),
         ];
-        assert_eq!(wheel_input(&both), Some(Input::WheelLeft));
+        assert_eq!(wheel_input(&both, &mut legacy()), Some(Input::WheelLeft));
         assert_eq!(
-            wheel_input(&[rel(RelativeAxisCode::REL_HWHEEL, 1)]),
+            wheel_input(&[rel(RelativeAxisCode::REL_HWHEEL, 1)], &mut legacy()),
             Some(Input::WheelRight)
         );
-        assert_eq!(wheel_input(&[rel(RelativeAxisCode::REL_WHEEL, 1)]), None);
+        assert_eq!(
+            wheel_input(&[rel(RelativeAxisCode::REL_WHEEL, 1)], &mut legacy()),
+            None
+        );
     }
 
     #[test]
@@ -756,7 +840,7 @@ mod tests {
             key(KeyCode::BTN_LEFT, 1),
         ];
         let mut seen = Vec::new();
-        let output = filter_batch(&batch, |input, down| {
+        let output = filter_batch(&batch, &mut legacy(), |input, down| {
             seen.push((input, down));
             input == Input::Back
         });
@@ -768,7 +852,7 @@ mod tests {
                 (EventType::KEY.0, KeyCode::BTN_LEFT.0)
             ]
         );
-        assert_eq!(filter_batch(&batch, |_, _| false).len(), 3);
+        assert_eq!(filter_batch(&batch, &mut legacy(), |_, _| false).len(), 3);
     }
 
     #[test]
@@ -779,7 +863,7 @@ mod tests {
             rel(RelativeAxisCode::REL_WHEEL, 1),
         ];
         let mut calls = 0;
-        let output = filter_batch(&batch, |input, _| {
+        let output = filter_batch(&batch, &mut legacy(), |input, _| {
             calls += 1;
             input == Input::WheelRight
         });
@@ -788,7 +872,56 @@ mod tests {
             codes(&output),
             [(EventType::RELATIVE.0, RelativeAxisCode::REL_WHEEL.0)]
         );
-        assert_eq!(filter_batch(&batch, |_, _| false).len(), 3);
+        assert_eq!(filter_batch(&batch, &mut legacy(), |_, _| false).len(), 3);
+    }
+
+    #[test]
+    fn hi_res_only_wheel_triggers_once_per_accumulated_notch() {
+        let hi = |value| [rel(RelativeAxisCode::REL_HWHEEL_HI_RES, value)];
+        let mut wheel = Wheel {
+            legacy: false,
+            hi_res: 0,
+        };
+        // One 120-unit notch split across reports fires once, on the report that completes it.
+        let fired: Vec<_> = [30, 30, 30, 30, 30, 30, 30, 30]
+            .into_iter()
+            .map(|value| wheel_input(&hi(value), &mut wheel))
+            .collect();
+        assert_eq!(fired.iter().filter(|input| input.is_some()).count(), 2);
+        assert_eq!(fired[3], Some(Input::WheelRight));
+        assert_eq!(fired[7], Some(Input::WheelRight));
+        // A reversal discards the partial notch instead of cancelling against it.
+        assert_eq!(wheel_input(&hi(90), &mut wheel), None);
+        assert_eq!(wheel_input(&hi(-120), &mut wheel), Some(Input::WheelLeft));
+        // A report that does not complete a notch is forwarded, not consumed.
+        let batch = hi(40);
+        let output = filter_batch(&batch, &mut wheel, |_, _| true);
+        assert_eq!(output.len(), 1);
+        // The legacy axis, when present, fires once per legacy event however many hi-res events arrive.
+        let mut with_legacy = legacy();
+        let batch = [
+            rel(RelativeAxisCode::REL_HWHEEL_HI_RES, 40),
+            rel(RelativeAxisCode::REL_HWHEEL, 1),
+        ];
+        assert_eq!(
+            wheel_input(&batch, &mut with_legacy),
+            Some(Input::WheelRight)
+        );
+        assert_eq!(wheel_input(&batch[..1], &mut with_legacy), None);
+    }
+
+    #[test]
+    fn appimage_environment_variables_are_stripped_for_launched_programs() {
+        for name in [
+            "LD_LIBRARY_PATH",
+            "APPDIR",
+            "APPIMAGE",
+            "GTK_PATH",
+            "PYTHONHOME",
+            "QT_PLUGIN_PATH",
+        ] {
+            assert!(APPIMAGE_ENV.contains(&name), "{name}");
+        }
     }
 
     #[test]

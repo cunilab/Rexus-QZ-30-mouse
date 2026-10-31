@@ -8,6 +8,7 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 - Linux support (x86_64): the receiver's evdev pointer device is grabbed and re-emitted through a `uinput` virtual mouse, so Back, Forward, Middle and the side wheel can be remapped or disabled on X11 and Wayland. Shortcuts and media keys use a virtual keyboard. A udev rule (`packaging/linux/70-qz-flow.rules`) grants access; see the README.
 - Linux AppImage and `.deb` release builds with signed updater artifacts, and a Linux job in the desktop checks.
+- Linux input hardening: the listener status is cleared even if the reader thread panics, a failed key release recreates the virtual keyboard so no modifier stays held, side-wheel tilt fires once per notch on high-resolution devices, and launched programs do not inherit AppImage environment variables.
 - Linux limits: no button 4, no shortcut recording, and Show desktop, Minimize and Maximize are rejected because GNOME and KDE share no shortcut for them. Linux hardware behavior is unverified.
 
 ### Fixed
