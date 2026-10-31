@@ -157,7 +157,7 @@ test("a Bluetooth-only mouse is named as such with its real device name", async 
   const { app } = nativeApp({ devices: [{ name: "Rexus QZ30", transport: "Bluetooth LE" }] });
   await tick();
   assert.equal(app.get("receiver-status").textContent, "Bluetooth mouse detected");
-  assert.match(app.get("receiver-detail").textContent, /Rexus QZ30 .* USB receiver/);
+  assert.match(app.get("receiver-detail").textContent, /Rexus QZ30 .* Bluetooth LE/);
   assert.equal(app.get("connection").textContent, "Bluetooth LE");
 });
 
@@ -366,7 +366,7 @@ test("thumb setup waits for receiver readiness before showing mappings active", 
   const native = nativeApp({ mapping_state: "preparing", hook_running: true });
   await tick();
   assert.equal(native.app.get("mapping-status").textContent, "Preparing button 4");
-  assert.match(native.app.get("mapping-detail").textContent, /receiver to confirm/);
+  assert.match(native.app.get("mapping-detail").textContent, /mouse to confirm/);
   Object.assign(native.status, { mapping_state: "active", enabled: true });
   await native.app.poll();
   assert.equal(native.app.get("mapping-status").textContent, "Mappings active");

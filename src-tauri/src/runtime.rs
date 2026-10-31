@@ -8,30 +8,14 @@ use std::sync::atomic::Ordering;
 
 fn validate(mappings: &Mappings) -> Result<(), String> {
     mappings.validate()?;
-    if cfg!(windows)
-        && [&mappings.wheel_left, &mappings.wheel_right, &mappings.thumb]
-            .contains(&&crate::Action::Disable)
+    let disable = crate::Action::Disable;
+    if mappings.thumb == disable
+        || (cfg!(windows) && [&mappings.wheel_left, &mappings.wheel_right].contains(&&disable))
     {
-        return Err("Disable is only supported for Middle, Back, and Forward on Windows; raw receiver inputs cannot be reliably suppressed.".into());
+        return Err("Disable is not supported for button 4 or, on Windows, the side wheel; raw receiver inputs cannot be reliably suppressed.".into());
     }
     for action in mappings.actions() {
         platform::validate_action(action)?;
-    }
-    if !cfg!(windows) && mappings.thumb != crate::Action::Default {
-        return Err(
-            "Thumb-rest input has not been identified yet; keep button 4 at default.".into(),
-        );
-    }
-    Ok(())
-}
-
-// Button 4 reports arrive only from the USB receiver; its Bluetooth path is not identified yet.
-fn require_receiver_for_thumb(
-    mappings: &Mappings,
-    devices: &[crate::Device],
-) -> Result<(), String> {
-    if mappings.thumb != crate::Action::Default && !devices.iter().any(platform::is_receiver) {
-        return Err("Button 4 over Bluetooth is not supported yet; use the USB receiver.".into());
     }
     Ok(())
 }
@@ -61,7 +45,6 @@ fn prepare(
                 "Connect the compatible USB receiver or pair the QZ30 over Bluetooth.".into()
             }));
         }
-        require_receiver_for_thumb(mappings, &inventory.devices)?;
         drop(inventory);
         if platform::permission() != "granted" {
             return Err(
@@ -219,37 +202,6 @@ mod tests {
             settings_path: "unused.json".into(),
         }
     }
-    #[test]
-    fn thumb_needs_the_usb_receiver_not_bluetooth() {
-        let device = |vendor_id, product_id| crate::Device {
-            vendor_id,
-            product_id,
-            name: String::new(),
-            transport: String::new(),
-        };
-        let ble = [device(
-            platform::BLUETOOTH_VENDOR,
-            platform::BLUETOOTH_PRODUCT,
-        )];
-        let both = [
-            ble[0].clone(),
-            device(platform::RECEIVER_VENDOR, platform::RECEIVER_PRODUCT),
-        ];
-        let thumb = Mappings {
-            thumb: Action::VolumeUp,
-            ..Mappings::default()
-        };
-        assert!(require_receiver_for_thumb(&thumb, &ble)
-            .unwrap_err()
-            .contains("Button 4 over Bluetooth is not supported yet"));
-        assert!(require_receiver_for_thumb(&thumb, &both).is_ok());
-        let back = Mappings {
-            back: Action::Copy,
-            ..Mappings::default()
-        };
-        assert!(require_receiver_for_thumb(&back, &ble).is_ok());
-    }
-
     #[cfg(windows)]
     #[test]
     fn disable_rejects_raw_receiver_inputs_but_accepts_os_buttons() {
@@ -260,9 +212,24 @@ mod tests {
         validate(&mappings).unwrap();
         mappings.wheel_left = Action::Disable;
         assert!(validate(&mappings).unwrap_err().contains("raw receiver"));
-        mappings.wheel_left = Action::Default;
-        mappings.thumb = Action::Disable;
-        assert!(validate(&mappings).is_err());
+    }
+
+    #[test]
+    fn disable_is_never_offered_for_button_4() {
+        let mappings = Mappings {
+            thumb: Action::Disable,
+            ..Mappings::default()
+        };
+        assert!(validate(&mappings).unwrap_err().contains("button 4"));
+    }
+
+    #[test]
+    fn thumb_mappings_are_valid_on_every_os() {
+        let mappings = Mappings {
+            thumb: Action::Copy,
+            ..Mappings::default()
+        };
+        validate(&mappings).unwrap();
     }
 
     #[test]
@@ -375,27 +342,6 @@ mod tests {
         assert!(!status.enabled);
         assert_eq!(status.mapping_state, "unavailable");
         assert!(status.error.unwrap().contains("saved"));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn unsupported_saved_thumb_mapping_reports_reason_before_native_calls() {
-        let state = state();
-        let mappings = Mappings {
-            thumb: Action::Copy,
-            ..Mappings::default()
-        };
-        assert!(prepare(&state, &mut None, &mappings).is_err());
-        assert!(state
-            .shared
-            .engine
-            .lock()
-            .unwrap()
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Thumb-rest"));
-        assert!(!state.shared.engine.lock().unwrap().enabled);
     }
 
     #[test]

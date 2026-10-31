@@ -1,5 +1,11 @@
 # Validation — first desktop slice
 
+## Button 4 on every OS and over Bluetooth
+
+The OEM feature-report exchange and the vendor input frames now work on Windows, macOS and Linux, over the USB receiver or Bluetooth LE. On macOS over Bluetooth (`32c2:0012`) the exact receiver exchange succeeded through IOKit feature reports (challenge, command1, mask on and reset all acknowledged), and the idle feature report is the checksum-invalid `bb00000000000000`, which the shared protocol accepts as an idle state. Exact records: `analysis/THUMB-MODE-EVIDENCE.json` (`bluetooth_macos`) and `analysis/THUMB-INPUT-MODE.md`. Protocol and worker logic is one shared module with fake-IO tests on every OS; Linux hidraw discovery (uevent `HID_ID` plus the `0xffbb` descriptor collection) and the macOS vendor-frame parser have unit tests. A read-only macOS check opened the Bluetooth device and read its feature report; the enable/reset writes by QZ Flow itself were not run on hardware.
+
+Still needing a physical check: a thumb press and release over Bluetooth (the frames are assumed identical to the receiver's), a press on macOS and Linux with the receiver, the Linux udev rule on real hardware (hidraw access on USB and uhid), Windows Bluetooth collection discovery and raw input, and behavior with both a receiver and a Bluetooth mouse connected (setup refuses).
+
 ## Button 4 receiver initialization — beta.6
 
 Local checks: 33 Node tests and 73 Windows Rust tests passed; formatting, version consistency, Clippy with warnings denied, and the optimized Windows build passed. Independent review passed after regression tests for bootstrap, mode loss, disconnect, cleanup failure and asynchronous Quit. The running beta.6 executable SHA256 is `861813c9a165cd3a45b1a5703fb5f0f067df0dd60f63903df699112d1a41218a`; a read-only feature query after app startup returned acknowledged mask `bb02000000040014`. Physical Volume up and lifecycle acceptance remain separate from these checks.
@@ -66,7 +72,7 @@ Native REA evidence: initial application `ev_fb459425d478357a66e11b2ee10b4e1f4fc
 
 - Actual QZ30 side-button and thumb-wheel events with Mouse Assistant closed, and a reversible remap in a disposable document. The original utility was left running and untouched.
 - macOS native build, permissions, HID registry values, button numbering, shortcuts and event-tap lifecycle on real hardware. Cross-compilation from this Windows host failed in a dependency needing an Apple native compiler. The CI definition is present but has not run remotely.
-- Bluetooth discovery is implemented from measured IDs (BLE `32c2:0012`: macOS IOKit; Windows `HID#{00001812-...}_DEV_VID&0232C2_PID&0012` paths and Linux `bustype 0x05` uhid input nodes follow the documented formats) but the Windows and Linux paths are verified only by unit tests and CI builds, not on hardware; button 4 over Bluetooth is rejected until its input path is captured. Model-specific HID/vendor commands are not implemented. DPI/report-rate/macros/firmware controls remain outside this first slice.
+- Bluetooth discovery is implemented from measured IDs (BLE `32c2:0012`: macOS IOKit; Windows `HID#{00001812-...}_DEV_VID&0232C2_PID&0012` paths and Linux `bustype 0x05` uhid input nodes follow the documented formats) but the Windows and Linux paths are verified only by unit tests and CI builds, not on hardware; button 4 over Bluetooth uses the same vendor protocol, with the exchange measured on macOS and the input frames still to be confirmed by a press. Model-specific HID/vendor commands are not implemented. DPI/report-rate/macros/firmware controls remain outside this first slice.
 - The OS-level listener is global. Elevated Windows applications can reject synthetic shortcuts. Natural scrolling, non-US keyboard layouts and simultaneous multiple-mouse button presses need additional hardware validation.
 
 ## Review and limits

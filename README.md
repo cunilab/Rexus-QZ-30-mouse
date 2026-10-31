@@ -1,6 +1,6 @@
 # QZ Flow
 
-An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Windows/macOS/Linux interface. It remaps OS mouse events and listens to observed side-wheel receiver reports on Windows; on Linux it reads the receiver's evdev input device; it does not use Rexus's DLL or change the mouse firmware.
+An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Windows/macOS/Linux interface. It remaps OS mouse events, listens to observed side-wheel receiver reports on Windows, and enables the mouse's separate button 4 input reports on every OS; on Linux it reads the receiver's evdev input device; it does not use Rexus's DLL or change the mouse firmware.
 
 ![QZ Flow interface with the original mouse render](docs/preview.png)
 
@@ -8,9 +8,9 @@ An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Wi
 
 Open `dist/windows/QZ Flow.exe` after building or extracting the Windows artifact.
 
-1. Connect the mouse's USB receiver, or pair the QZ30 over Bluetooth LE (works on Windows, macOS and Linux). Button 4 needs the USB receiver.
+1. Connect the mouse's USB receiver, or pair the QZ30 over Bluetooth LE (works on Windows, macOS and Linux, including button 4).
 2. Quit the original Mouse Assistant from its system tray menu. QZ Flow refuses to activate mappings while that utility is running.
-3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 currently requires Windows and the USB receiver; over Bluetooth it is rejected when saving.
+3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 works on Windows, macOS and Linux, over the receiver or Bluetooth: QZ Flow first prepares the mouse in the background and shows **Preparing button 4** until it is ready. Connect only one of the two (receiver or Bluetooth) while using button 4.
 4. Test a simple action, such as Back ? Copy, in a disposable text document. You can edit while mappings run; changes take effect only after Save.
 5. Use the tray menu to **Pause/Resume mappings** or **Quit**. Close hides the window; Minimize keeps the normal Windows behavior. Open **Settings** in the sidebar for **Launch at login** and window-behavior details. Login launches start hidden.
 
@@ -20,7 +20,7 @@ Active mappings apply to **all mice and trackpads on this computer**, not exclus
 
 Actions are grouped into Mouse, Editing, Desktop and windows, Browser and tabs, Media, Zoom and capture, and Custom. Click a mouse marker to select its editor. Custom shortcuts can be selected manually or recorded while QZ Flow has focus; application assignments use a native picker. Save and apply activates the draft. See [action behavior and verification](docs/ACTIONS.md).
 
-Primary left/right click and vertical scrolling are left alone. Over Bluetooth, Middle, Back, Forward and horizontal scroll are ordinary OS mouse events on every platform; the Windows button 4 and receiver wheel frames are USB-receiver-only. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS requires horizontal OS scroll events and has no thumb-rest support. Disable is unavailable for Windows raw receiver wheel/thumb inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
+Primary left/right click and vertical scrolling are left alone. Over Bluetooth, Middle, Back, Forward and horizontal scroll are ordinary OS mouse events on every platform; Windows receiver side-wheel frames are USB-receiver-only. Windows accepts observed side-wheel frames from this receiver; macOS and Linux use horizontal OS scroll events. Button 4 uses the mouse's vendor input on every OS (verified on Windows with the receiver; on macOS the Bluetooth setup exchange was measured, but a physical press over Bluetooth and the Linux and Windows Bluetooth paths are still unverified). Disable is unavailable for button 4 and for Windows raw receiver wheel inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
 
 ## Use on Linux
 
@@ -36,7 +36,7 @@ Linux reads the QZ30's `/dev/input/event*` device (the USB receiver, or the Blue
 
    Sign out and in if `/dev/uinput` is still not writable. QZ Flow shows **Open input permissions** until the mouse's node is readable and `/dev/uinput` is writable; that button only explains these steps because Linux has no permission dialog.
 2. Mappings grab only the QZ30's pointer device (receiver or Bluetooth), not every mouse. Keyboard shortcuts and media keys are sent through a virtual keyboard. Unsupported actions (Show desktop, Minimize, Maximize) are rejected when saving; see [action behavior](docs/ACTIONS.md).
-3. Button 4 (thumb rest), shortcut recording and window actions are unavailable. Choose keys manually for custom shortcuts. **Choose application** needs `zenity` or `kdialog`.
+3. Button 4 (thumb rest) is read and configured through the mouse's `hidraw` vendor node, which the same udev rule opens up (replug or reconnect after installing it); shortcut recording and window actions are unavailable. Choose keys manually for custom shortcuts. **Choose application** needs `zenity` or `kdialog`.
 4. The tray icon needs an AppIndicator-capable desktop (GNOME needs the AppIndicator extension). Without a tray, start QZ Flow again to reopen its window. Launch at login writes `~/.config/autostart/dev.qzflow.desktop`.
 
 Linux builds and unit tests run in GitHub Actions; real receiver behavior on Linux is unverified. Linux cannot see physically held keyboard modifiers, so a held Ctrl/Alt/Shift/Super combines with an injected shortcut instead of bypassing it, and on X11 the injected Ctrl/Alt/Shift/Super release can release a modifier you are physically holding. Only key and relative-motion events are mirrored by the virtual mouse; absolute-axis, LED and switch events on the grabbed receiver node are not. Programs started from an AppImage build do not inherit the AppImage's library environment.

@@ -1,3 +1,4 @@
+use super::thumb::{self, FeatureIo};
 use crate::{
     engine::{Action, Input},
     Device, Shared,
@@ -16,12 +17,20 @@ use std::{
         mpsc, Arc, Mutex, OnceLock,
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
 static KEYBOARD: Mutex<Option<VirtualDevice>> = Mutex::new(None);
 const SYSFS_INPUT: &str = "/sys/class/input";
 const UINPUT: &str = "/dev/uinput";
+const SYSFS_HIDRAW: &str = "/sys/class/hidraw";
+// _IOC(_IOC_READ | _IOC_WRITE, 'H', nr, len) as on x86 and Arm; other architectures encode it differently.
+const fn hid_ioc(nr: u32, len: u32) -> libc::Ioctl {
+    ((3 << 30) | (len << 16) | ((b'H' as u32) << 8) | nr) as libc::Ioctl
+}
+const HIDIOCSFEATURE_8: libc::Ioctl = hid_ioc(0x06, 8);
+const HIDIOCGFEATURE_8: libc::Ioctl = hid_ioc(0x07, 8);
 // Discovery skips devices with this prefix, so our own virtual devices are never re-processed.
 const VIRTUAL_PREFIX: &str = "QZ Flow virtual";
 const MOUSE_NAME: &str = "QZ Flow virtual mouse";
@@ -176,15 +185,142 @@ pub fn open_input_settings() -> Result<(), String> {
     ))
 }
 
+// uevent line `HID_ID=<bus>:<vendor>:<product>` in hexadecimal; USB is bus 0003, Bluetooth (uhid) bus 0005.
+fn parse_hid_id(uevent: &str) -> Option<(u32, u16, u16)> {
+    let mut parts = uevent
+        .lines()
+        .find_map(|line| line.strip_prefix("HID_ID="))?
+        .split(':')
+        .map(|part| u32::from_str_radix(part, 16).ok());
+    let (bus, vendor, product) = (parts.next()??, parts.next()??, parts.next()??);
+    Some((bus, vendor.try_into().ok()?, product.try_into().ok()?))
+}
+
+// The hidraw node of the vendor collection ffbb:1; a receiver has several, a Bluetooth mouse one.
+fn is_vendor_node(uevent: &str, descriptor: &[u8]) -> bool {
+    let id = parse_hid_id(uevent).unwrap_or_default();
+    // Buses in COMPATIBLE_IDS order: the receiver is USB, the mouse's Bluetooth LE input comes from uhid.
+    super::COMPATIBLE_IDS
+        .into_iter()
+        .zip([0x0003, 0x0005])
+        .any(|((vendor, product), bus)| (bus, vendor, product) == id)
+        && thumb::has_vendor_collection(descriptor)
+}
+
+// sysfs is world-readable, so the node is found before /dev/hidraw access is granted.
+fn vendor_nodes() -> Result<Vec<PathBuf>, String> {
+    let entries = fs::read_dir(SYSFS_HIDRAW)
+        .map_err(|error| format!("Linux could not list HID devices: {error}"))?;
+    let mut nodes: Vec<_> = entries
+        .flatten()
+        .filter(|entry| {
+            let device = entry.path().join("device");
+            is_vendor_node(
+                &fs::read_to_string(device.join("uevent")).unwrap_or_default(),
+                &fs::read(device.join("report_descriptor")).unwrap_or_default(),
+            )
+        })
+        .map(|entry| Path::new("/dev").join(entry.file_name()))
+        .collect();
+    nodes.sort();
+    Ok(nodes)
+}
+
+fn open_vendor_node(write: bool) -> Result<fs::File, String> {
+    let nodes = vendor_nodes()?;
+    let [path] = &nodes[..] else {
+        return Err(thumb::AMBIGUOUS.into());
+    };
+    fs::OpenOptions::new()
+        .read(true)
+        .write(write)
+        .open(path)
+        .map_err(|error| format!("Could not open {} ({error}). {SETUP_HINT}", path.display()))
+}
+
+// Feature reports 0xBB through hidraw; the buffer carries the report ID first.
+struct Hidraw(fs::File);
+
+impl Hidraw {
+    fn open() -> Result<Self, String> {
+        open_vendor_node(true).map(Self)
+    }
+
+    fn feature(&self, request: libc::Ioctl, report: &mut [u8; 8]) -> Result<(), String> {
+        let code = unsafe { libc::ioctl(self.0.as_raw_fd(), request, report.as_mut_ptr()) };
+        if code < 0 {
+            Err(format!(
+                "QZ30 feature report failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl FeatureIo for Hidraw {
+    fn write(&mut self, mut report: [u8; 8]) -> Result<(), String> {
+        self.feature(HIDIOCSFEATURE_8, &mut report)
+    }
+
+    fn read(&mut self) -> Result<[u8; 8], String> {
+        let mut report = [0xbb, 0, 0, 0, 0, 0, 0, 0];
+        self.feature(HIDIOCGFEATURE_8, &mut report)?;
+        Ok(report)
+    }
+}
+
+// Button 4 frames arrive as input reports on the vendor node, read only while the mode is active.
+fn read_thumb(shared: &Shared, stop: &AtomicBool) {
+    let (mut file, mut held, mut frame) = (None, false, [0u8; 64]);
+    while !stop.load(Ordering::Acquire) {
+        if !shared.thumb_ready.load(Ordering::Acquire) {
+            file = None;
+        } else if file.is_none() {
+            file = open_vendor_node(false).ok();
+            held = false;
+        }
+        let Some(node) = &file else {
+            thread::sleep(Duration::from_millis(100));
+            continue;
+        };
+        let mut poll = libc::pollfd {
+            fd: node.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, 100) } <= 0 {
+            continue;
+        }
+        let length = unsafe { libc::read(poll.fd, frame.as_mut_ptr().cast(), frame.len()) };
+        if length <= 0 || poll.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            file = None; // The node vanished; reopen once the mode is ready again.
+            continue;
+        }
+        if let Some((input, down)) = thumb::thumb_edge(&frame[..length as usize], &mut held) {
+            shared.process(input, down, perform);
+        }
+    }
+}
+
 pub struct Hook {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    // Button 4 worker and frame reader.
+    thumb: Vec<JoinHandle<()>>,
 }
 
 impl Drop for Hook {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        for worker in &self.thumb {
+            worker.thread().unpark();
+        }
         if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        for join in self.thumb.drain(..) {
             let _ = join.join();
         }
         *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -332,10 +468,25 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
         })?;
     shared.hook_running.store(true, Ordering::Release);
     let _ = go.send(());
-    Ok(Hook {
-        stop,
+    // Dropping the hook on a failed spawn stops the input thread again.
+    let mut hook = Hook {
+        stop: stop.clone(),
         join: Some(join),
-    })
+        thumb: Vec::new(),
+    };
+    hook.thumb.push(thumb::spawn_worker(
+        shared.clone(),
+        stop.clone(),
+        Hidraw::open,
+    )?);
+    let reader_shared = shared.clone();
+    hook.thumb.push(
+        thread::Builder::new()
+            .name("qz-hidraw".into())
+            .spawn(move || read_thumb(&reader_shared, &stop))
+            .map_err(|error| format!("Could not start the button 4 reader: {error}"))?,
+    );
+    Ok(hook)
 }
 
 // Returns when asked to stop or when a device disappears; polling keeps shutdown prompt.
@@ -778,6 +929,32 @@ fn perform(action: Action) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hid_feature_ioctls_match_the_kernel_values() {
+        assert_eq!(HIDIOCSFEATURE_8 as u32, 0xc008_4806);
+        assert_eq!(HIDIOCGFEATURE_8 as u32, 0xc008_4807);
+    }
+
+    #[test]
+    fn hid_id_and_descriptor_select_the_vendor_node_on_both_transports() {
+        let vendor = [0x06, 0xbb, 0xff, 0x09, 0x01, 0xa1, 0x01];
+        let uevent = |id: &str| format!("DRIVER=hid-generic\nHID_ID={id}\nHID_NAME=QZ30\n");
+        let usb = uevent("0003:0000276D:00001902");
+        let ble = uevent("0005:000032C2:00000012");
+        assert_eq!(parse_hid_id(&usb), Some((3, 0x276d, 0x1902)));
+        assert!(is_vendor_node(&usb, &vendor));
+        assert!(is_vendor_node(&ble, &vendor));
+        // The mouse and keyboard interfaces of the same receiver have no vendor collection.
+        assert!(!is_vendor_node(&usb, &[0x05, 0x01, 0x09, 0x02, 0xa1, 0x01]));
+        // IDs must come with their own bus.
+        assert!(!is_vendor_node(&uevent("0005:0000276D:00001902"), &vendor));
+        assert!(!is_vendor_node(&uevent("0003:000032C2:00000012"), &vendor));
+        assert!(!is_vendor_node(&uevent("0003:000046D:0000C52B"), &vendor));
+        assert_eq!(parse_hid_id("HID_ID=0003:0001276D:00001902"), None);
+        assert_eq!(parse_hid_id("HID_ID=zz:1:2"), None);
+        assert_eq!(parse_hid_id("HID_NAME=QZ30"), None);
+    }
 
     fn key(code: KeyCode, value: i32) -> InputEvent {
         InputEvent::new(EventType::KEY.0, code.0, value)

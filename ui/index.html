@@ -30,7 +30,7 @@
         </div>
         <div class="receiver"><span id="receiver-dot" class="status-dot"></span><div><strong id="receiver-status">Checking receiver…</strong><p id="receiver-detail">Looking for a compatible USB receiver or Bluetooth mouse.</p></div></div>
         <dl class="device-meta"><div><dt>Connection</dt><dd id="connection">—</dd></div><div><dt>Last input</dt><dd id="last-input">No input yet</dd></div></dl>
-        <p class="footnote">A detected receiver does not confirm that the mouse is powered on. Its USB ID is shared by several models. A Bluetooth-connected QZ30 also works on Windows, macOS and Linux; button 4 still needs the USB receiver.</p>
+        <p class="footnote">A detected receiver does not confirm that the mouse is powered on. Its USB ID is shared by several models. A Bluetooth-connected QZ30 also works on Windows, macOS and Linux, including button 4.</p>
       </section>
       <section class="mapping-card" aria-labelledby="mapping-title">
         <div class="card-top"><div><h2 id="mapping-title">Button assignments</h2><p>Less reaching. More doing.</p></div><span id="draft-state" class="draft-state">Saved locally</span></div>
@@ -57,7 +57,7 @@
             <button id="pick-application" type="button" class="button secondary">Choose application</button>
           </fieldset>
         </section>
-        <p class="wheel-note">Side wheel and button 4 use receiver input on Windows. macOS and Linux use OS scroll events; button 4 is unavailable there.</p>
+        <p class="wheel-note">On Windows the side wheel uses receiver input; macOS and Linux use OS scroll events. Button 4 is prepared in the background through the mouse's vendor input on every OS, over the USB receiver or Bluetooth.</p>
         <div class="mapping-actions"><button id="reset" class="button secondary" type="button">Reset to defaults</button><button id="save" class="button primary" type="button" disabled>Save and apply</button></div>
         <div class="mapping-status-area"><h3 id="mapping-status" role="status" aria-live="polite">Checking mappings...</h3><p id="mapping-detail">Reading saved assignments.</p><p class="scope-notice">Active mappings apply to all mice and trackpads on this computer. Close the original mouse utility first. Pause or Resume from the tray or menu bar.</p><button id="permission" class="text-button" type="button" hidden>Open input permissions</button></div>
       </section>

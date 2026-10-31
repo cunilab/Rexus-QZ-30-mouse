@@ -165,7 +165,6 @@ pub enum Input {
     Middle,
     WheelLeft,
     WheelRight,
-    #[cfg_attr(not(windows), allow(dead_code))] // Receiver thumb input is currently Windows-only.
     Thumb,
 }
 

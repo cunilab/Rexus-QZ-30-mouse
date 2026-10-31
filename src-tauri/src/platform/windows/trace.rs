@@ -1,5 +1,5 @@
-use super::compatible_path;
-use crate::engine::Input;
+use super::{bluetooth_path, compatible_path};
+use crate::{engine::Input, platform::thumb};
 use serde_json::json;
 use std::{
     mem::size_of,
@@ -29,18 +29,14 @@ unsafe fn name(handle: HANDLE) -> Option<String> {
     Some(String::from_utf16_lossy(&text).to_ascii_uppercase())
 }
 
-fn hid_reports(body: &[u8]) -> Option<Vec<String>> {
+fn hid_reports(body: &[u8]) -> Option<Vec<&[u8]>> {
     let size = u32::from_le_bytes(body.get(..4)?.try_into().ok()?) as usize;
     let count = u32::from_le_bytes(body.get(4..8)?.try_into().ok()?) as usize;
     if size == 0 || size > 64 || count > 32 {
         return None;
     }
     let data = body.get(8..8usize.checked_add(size.checked_mul(count)?)?)?;
-    Some(
-        data.chunks_exact(size)
-            .map(|report| report.iter().map(|byte| format!("{byte:02x}")).collect())
-            .collect(),
-    )
+    Some(data.chunks_exact(size).collect())
 }
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -66,7 +62,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     && received >= header_size
                 {
                     let header = &*(storage.as_ptr() as *const RAWINPUTHEADER);
-                    if name(header.hDevice).is_some_and(|path| compatible_path(&path)) {
+                    // The running hook window (state != 0) also takes button 4 from the Bluetooth mouse.
+                    let path = name(header.hDevice);
+                    let ble = GetWindowLongPtrW(hwnd, GWLP_USERDATA) != 0
+                        && path.as_deref().is_some_and(bluetooth_path);
+                    if ble || path.as_deref().is_some_and(compatible_path) {
                         let bytes = std::slice::from_raw_parts(
                             storage.as_ptr().cast::<u8>(),
                             received as usize,
@@ -89,7 +89,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                         let mut thumb_down = state & 2 != 0;
                                         if let (Some(shared), Some((input, down))) = (
                                             super::SHARED.get(),
-                                            receiver_event(&report, &mut thumb_down),
+                                            receiver_event(report, &mut thumb_down).filter(
+                                                |(input, _)| !ble || *input == Input::Thumb,
+                                            ),
                                         ) {
                                             shared.process(input, down, super::perform);
                                         }
@@ -99,6 +101,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                             if thumb_down { 3 } else { 1 },
                                         );
                                     } else {
+                                        let report: String = report
+                                            .iter()
+                                            .map(|byte| format!("{byte:02x}"))
+                                            .collect();
                                         println!(
                                             "{}",
                                             json!({"kind":"vendor_hid","report":report})
@@ -125,26 +131,20 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
 }
 
 // shortcut: accept only complete frames captured from this receiver; extend with new hardware evidence.
-fn side_wheel(report: &str) -> Option<Input> {
+fn side_wheel(report: &[u8]) -> Option<Input> {
     match report {
-        "bb04000000010017" | "bb04000000020014" => Some(Input::WheelRight),
-        "bb04000000ff00e9" | "bb04000000fe00e8" => Some(Input::WheelLeft),
+        [0xbb, 4, 0, 0, 0, 0x01, 0, 0x17] | [0xbb, 4, 0, 0, 0, 0x02, 0, 0x14] => {
+            Some(Input::WheelRight)
+        }
+        [0xbb, 4, 0, 0, 0, 0xff, 0, 0xe9] | [0xbb, 4, 0, 0, 0, 0xfe, 0, 0xe8] => {
+            Some(Input::WheelLeft)
+        }
         _ => None,
     }
 }
 
-fn receiver_event(report: &str, thumb_down: &mut bool) -> Option<(Input, bool)> {
-    match report {
-        "bb04000400000012" if !*thumb_down => {
-            *thumb_down = true;
-            Some((Input::Thumb, true))
-        }
-        "bb04000000000016" if *thumb_down => {
-            *thumb_down = false;
-            Some((Input::Thumb, false))
-        }
-        _ => side_wheel(report).map(|input| (input, true)),
-    }
+fn receiver_event(report: &[u8], thumb_down: &mut bool) -> Option<(Input, bool)> {
+    thumb::thumb_edge(report, thumb_down).or_else(|| side_wheel(report).map(|input| (input, true)))
 }
 
 pub(super) unsafe fn vendor_window() -> Result<HWND, String> {
@@ -313,30 +313,39 @@ pub fn trace_buttons() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn hex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect()
+    }
     #[test]
     fn thumb_edges_are_paired_and_neutral_wheel_frames_are_not_thumb_presses() {
         let mut held = false;
-        assert_eq!(receiver_event("bb04000000000016", &mut held), None);
+        assert_eq!(receiver_event(&hex("bb04000000000016"), &mut held), None);
         assert_eq!(
-            receiver_event("bb04000400000012", &mut held),
+            receiver_event(&hex("bb04000400000012"), &mut held),
             Some((Input::Thumb, true))
         );
-        assert_eq!(receiver_event("bb04000400000012", &mut held), None);
-        assert_eq!(receiver_event("bb04000400000013", &mut held), None);
+        assert_eq!(receiver_event(&hex("bb04000400000012"), &mut held), None);
+        assert_eq!(receiver_event(&hex("bb04000400000013"), &mut held), None);
         assert!(held);
         assert_eq!(
-            receiver_event("bb04000000000016", &mut held),
+            receiver_event(&hex("bb04000000000016"), &mut held),
             Some((Input::Thumb, false))
         );
         assert!(!held);
     }
     #[test]
     fn only_observed_side_wheel_frames_generate_actions() {
-        assert_eq!(side_wheel("bb04000000010017"), Some(Input::WheelRight));
-        assert_eq!(side_wheel("bb04000000ff00e9"), Some(Input::WheelLeft));
-        assert_eq!(side_wheel("bb04000000000016"), None);
-        assert_eq!(side_wheel("bb04000000010018"), None);
-        assert_eq!(side_wheel(""), None);
+        assert_eq!(
+            side_wheel(&hex("bb04000000010017")),
+            Some(Input::WheelRight)
+        );
+        assert_eq!(side_wheel(&hex("bb04000000ff00e9")), Some(Input::WheelLeft));
+        assert_eq!(side_wheel(&hex("bb04000000000016")), None);
+        assert_eq!(side_wheel(&hex("bb04000000010018")), None);
+        assert_eq!(side_wheel(&hex("")), None);
     }
     #[test]
     fn hid_packet_bounds_are_checked_before_reading() {
@@ -345,7 +354,7 @@ mod tests {
         assert!(hid_reports(&[0, 0, 0, 0, 1, 0, 0, 0]).is_none());
         assert_eq!(
             hid_reports(&[2, 0, 0, 0, 2, 0, 0, 0, 1, 2, 3, 4]).unwrap(),
-            vec!["0102", "0304"]
+            vec![&[1, 2][..], &[3, 4][..]]
         );
     }
 }

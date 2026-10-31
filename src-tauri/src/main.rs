@@ -142,7 +142,6 @@ impl Shared {
             && !engine.paused
             && !self.stopping.load(Ordering::Acquire);
         let preparing = running
-            && cfg!(windows)
             && engine.mappings.thumb != Action::Default
             && !self.thumb_ready.load(Ordering::Acquire);
         let enabled = running && !preparing;
@@ -170,7 +169,7 @@ impl Shared {
             error: inventory.error.clone().or_else(|| engine.error.clone()).or_else(|| {
                 (mapping_state == "unavailable").then(|| "Mappings are waiting for the receiver and input listener. QZ Flow will retry automatically.".into())
             }),
-            thumb_available: cfg!(windows),
+            thumb_available: true,
             launch_at_login: None,
         }
     }
@@ -391,7 +390,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
     #[test]
     fn thumb_is_preparing_until_receiver_acknowledges_mode() {
         let shared = Shared::default();

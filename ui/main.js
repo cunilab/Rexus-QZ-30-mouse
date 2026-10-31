@@ -135,7 +135,7 @@ function render() {
   const unavailable = preview || !initialized || connectionFailed;
   byId("preview").hidden = !preview;
   byId("receiver-status").textContent = preview ? "Interface preview" : connectionFailed ? "Connection unavailable" : detected ? (bluetoothOnly ? "Bluetooth mouse detected" : "Compatible receiver detected") : initialized ? "No compatible receiver or Bluetooth mouse detected" : "Checking receiver…";
-  byId("receiver-detail").textContent = preview ? "Open the desktop app to connect." : connectionFailed ? "Retrying the desktop connection automatically." : detected ? (bluetoothOnly ? `${status.devices[0].name || "QZ30"} · button 4 needs the USB receiver` : "Receiver present · mouse power is not verified") : "Connect your QZ30 receiver or pair it over Bluetooth to get started.";
+  byId("receiver-detail").textContent = preview ? "Open the desktop app to connect." : connectionFailed ? "Retrying the desktop connection automatically." : detected ? (bluetoothOnly ? `${status.devices[0].name || "QZ30"} · connected over Bluetooth LE` : "Receiver present · mouse power is not verified") : "Connect your QZ30 receiver or pair it over Bluetooth to get started.";
   byId("receiver-dot").classList.toggle("connected", detected && !connectionFailed);
   byId("connection").textContent = detected ? status.devices.map((device) => device.transport || "USB").filter((value, index, all) => all.indexOf(value) === index).join(", ") : "—";
   byId("last-input").textContent = status?.last_input || "No input yet";
@@ -146,7 +146,7 @@ function render() {
     byId(`mapping-${key}`).value = actionKind(draft[key]);
     byId(`mapping-${key}`).disabled = (key === "thumb" && !status?.thumb_available) || busy || (!preview && unavailable);
     for (const option of byId(`mapping-${key}`).options) {
-      if (option.value === "disable") option.hidden = option.disabled = !["macos", "linux"].includes(status?.platform) && ["wheel_left", "wheel_right", "thumb"].includes(key);
+      if (option.value === "disable") option.hidden = option.disabled = key === "thumb" || (!["macos", "linux"].includes(status?.platform) && ["wheel_left", "wheel_right"].includes(key));
     }
     byId(`marker-${key}`).disabled = byId(`mapping-${key}`).disabled;
     byId(`marker-${key}`).setAttribute("aria-pressed", String(key === selectedInput));
@@ -160,7 +160,7 @@ function render() {
   byId("reset").disabled = busy || (!preview && unavailable) || inputs.every(([key]) => draft[key] === "default");
   const mappingState = status?.mapping_state;
   byId("mapping-status").textContent = preview ? "Interface preview" : connectionFailed ? "Connection unavailable" : !initialized ? "Checking mappings..." : mappingState === "preparing" ? "Preparing button 4" : mappingState === "active" ? "Mappings active" : mappingState === "paused" ? "Mappings paused" : mappingState === "default" ? "Default behavior" : "Mappings unavailable";
-  byId("mapping-detail").textContent = preview ? "Open the desktop app to apply assignments." : connectionFailed ? "Waiting for the desktop connection." : !initialized ? "Reading saved assignments." : status?.paused ? "Save and apply resumes mappings. You can also Resume from the tray or menu bar." : mappingState === "preparing" ? "Waiting for the receiver to confirm button 4 is ready." : mappingState === "unavailable" ? "Save and apply to retry. Check the error message and input permissions if required." : dirty ? "Your edits are a draft. Current behavior continues until you Save and apply." : mappingState === "active" ? "Saved assignments are running. Pause or Resume from the tray or menu bar." : "Choose an assignment, then Save and apply.";
+  byId("mapping-detail").textContent = preview ? "Open the desktop app to apply assignments." : connectionFailed ? "Waiting for the desktop connection." : !initialized ? "Reading saved assignments." : status?.paused ? "Save and apply resumes mappings. You can also Resume from the tray or menu bar." : mappingState === "preparing" ? "Waiting for the mouse to confirm button 4 is ready." : mappingState === "unavailable" ? "Save and apply to retry. Check the error message and input permissions if required." : dirty ? "Your edits are a draft. Current behavior continues until you Save and apply." : mappingState === "active" ? "Saved assignments are running. Pause or Resume from the tray or menu bar." : "Choose an assignment, then Save and apply.";
   byId("permission").hidden = !["macos", "linux"].includes(status?.platform) || status?.permission !== "required";
   byId("permission").disabled = busy;
   const startupAvailable = typeof status?.launch_at_login === "boolean";
@@ -173,7 +173,7 @@ function render() {
   byId("editor-title").textContent = `${inputs.find(([key]) => key === selectedInput)[1]} action`;
   byId("shortcut-editor").hidden = !selected?.custom_shortcut;
   byId("application-editor").hidden = !selected?.launch_application;
-  byId("editor-hint").textContent = recording ? "Recording: press a shortcut. Escape cancels; recording ends after 10 seconds. Finish or cancel before saving." : incomplete.length ? `Choose an application for ${incomplete.join(", ")} before saving.` : "Select a mouse marker or button row to edit. Actions use OS and app shortcuts, which may need enabling in system settings. Disable is unavailable for the Windows receiver side wheel and thumb-rest button. The last detected input stays highlighted.";
+  byId("editor-hint").textContent = recording ? "Recording: press a shortcut. Escape cancels; recording ends after 10 seconds. Finish or cancel before saving." : incomplete.length ? `Choose an application for ${incomplete.join(", ")} before saving.` : "Select a mouse marker or button row to edit. Actions use OS and app shortcuts, which may need enabling in system settings. Disable is unavailable for the thumb-rest button and the Windows receiver side wheel. The last detected input stays highlighted.";
   byId("shortcut-key").value = selected?.custom_shortcut?.key || "KeyC";
   byId("shortcut-key").disabled = editorDisabled;
   for (const option of byId("shortcut-key").options) {

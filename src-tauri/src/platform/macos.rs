@@ -1,3 +1,4 @@
+use super::thumb::{self, FeatureIo};
 use crate::{
     engine::{Action, Input},
     Device, Shared,
@@ -15,7 +16,10 @@ use std::{
 type Ref = *const c_void;
 type Event = *mut c_void;
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
+static THUMB_HELD: AtomicBool = AtomicBool::new(false);
 const UTF8: u32 = 0x08000100;
+const FEATURE_REPORT: u32 = 2;
+const NOT_PERMITTED: i32 = 0xe00002e2u32 as i32;
 const COMMAND: u64 = 1 << 20;
 const SHIFT: u64 = 1 << 17;
 const CONTROL: u64 = 1 << 18;
@@ -30,12 +34,28 @@ extern "C" {
     fn CFStringCreateWithCString(allocator: Ref, string: *const c_char, encoding: u32) -> Ref;
     fn CFStringGetCString(value: Ref, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
     fn CFNumberGetValue(value: Ref, kind: isize, result: *mut c_void) -> bool;
+    fn CFNumberCreate(allocator: Ref, kind: isize, value: *const c_void) -> Ref;
+    fn CFDictionaryCreate(
+        allocator: Ref,
+        keys: *const Ref,
+        values: *const Ref,
+        count: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> Ref;
+    fn CFSetGetCount(set: Ref) -> isize;
+    fn CFSetGetValues(set: Ref, values: *mut Ref);
+    fn CFDataGetTypeID() -> usize;
+    fn CFDataGetLength(data: Ref) -> isize;
+    fn CFDataGetBytePtr(data: Ref) -> *const u8;
     fn CFMachPortCreateRunLoopSource(allocator: Ref, port: Ref, order: isize) -> Ref;
     fn CFMachPortInvalidate(port: Ref);
     fn CFRunLoopGetCurrent() -> Ref;
     fn CFRunLoopAddSource(loop_ref: Ref, source: Ref, mode: Ref);
     fn CFRunLoopRunInMode(mode: Ref, seconds: f64, return_after_source: bool) -> i32;
     static kCFRunLoopCommonModes: Ref;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
     static kCFRunLoopDefaultMode: Ref;
 }
 
@@ -46,6 +66,33 @@ extern "C" {
     fn IOIteratorNext(iterator: u32) -> u32;
     fn IOObjectRelease(object: u32) -> i32;
     fn IORegistryEntryCreateCFProperty(entry: u32, key: Ref, allocator: Ref, options: u32) -> Ref;
+    fn IOHIDManagerCreate(allocator: Ref, options: u32) -> Ref;
+    fn IOHIDManagerSetDeviceMatching(manager: Ref, matching: Ref);
+    fn IOHIDManagerOpen(manager: Ref, options: u32) -> i32;
+    fn IOHIDManagerClose(manager: Ref, options: u32) -> i32;
+    fn IOHIDManagerCopyDevices(manager: Ref) -> Ref;
+    fn IOHIDManagerRegisterInputReportCallback(
+        manager: Ref,
+        callback: unsafe extern "C" fn(*mut c_void, i32, *mut c_void, u32, u32, *const u8, isize),
+        context: *mut c_void,
+    );
+    fn IOHIDManagerScheduleWithRunLoop(manager: Ref, run_loop: Ref, mode: Ref);
+    fn IOHIDManagerUnscheduleFromRunLoop(manager: Ref, run_loop: Ref, mode: Ref);
+    fn IOHIDDeviceGetProperty(device: Ref, key: Ref) -> Ref;
+    fn IOHIDDeviceSetReport(
+        device: Ref,
+        kind: u32,
+        report_id: isize,
+        report: *const u8,
+        length: isize,
+    ) -> i32;
+    fn IOHIDDeviceGetReport(
+        device: Ref,
+        kind: u32,
+        report_id: isize,
+        report: *mut u8,
+        length: *mut isize,
+    ) -> i32;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -193,15 +240,235 @@ pub fn open_input_settings() -> Result<(), String> {
         .ok_or_else(|| "Could not open macOS permission settings.".into())
 }
 
+unsafe fn cf_string(text: &str) -> Ref {
+    let text = CString::new(text).unwrap();
+    CFStringCreateWithCString(null(), text.as_ptr(), UTF8)
+}
+
+// A HID manager matching one transport's IDs, returned unopened so the caller picks the run loop.
+unsafe fn manager(vendor: u16, product: u16) -> Result<Ref, String> {
+    let manager = IOHIDManagerCreate(null(), 0);
+    if manager.is_null() {
+        return Err("macOS could not create a HID manager.".into());
+    }
+    let keys = [cf_string("VendorID"), cf_string("ProductID")];
+    let values = [vendor, product].map(|id| {
+        let id = id as i32;
+        CFNumberCreate(null(), 3, (&id as *const i32).cast())
+    });
+    let matching = CFDictionaryCreate(
+        null(),
+        keys.as_ptr(),
+        values.as_ptr(),
+        2,
+        (&raw const kCFTypeDictionaryKeyCallBacks).cast(),
+        (&raw const kCFTypeDictionaryValueCallBacks).cast(),
+    );
+    for item in keys.into_iter().chain(values) {
+        CFRelease(item);
+    }
+    if matching.is_null() {
+        CFRelease(manager);
+        return Err("macOS could not describe the mouse to match.".into());
+    }
+    IOHIDManagerSetDeviceMatching(manager, matching);
+    CFRelease(matching);
+    Ok(manager)
+}
+
+unsafe fn open_manager(manager: Ref) -> Result<(), String> {
+    match IOHIDManagerOpen(manager, 0) {
+        0 => Ok(()),
+        NOT_PERMITTED => Err("macOS denied access to the mouse's vendor interface. Allow QZ Flow under Privacy & Security > Input Monitoring.".into()),
+        code => Err(format!("macOS could not open the mouse's vendor interface ({code:#x}).")),
+    }
+}
+
+unsafe fn has_vendor_collection(device: Ref) -> bool {
+    let key = cf_string("ReportDescriptor");
+    let data = IOHIDDeviceGetProperty(device, key);
+    CFRelease(key);
+    !data.is_null()
+        && CFGetTypeID(data) == CFDataGetTypeID()
+        && thumb::has_vendor_collection(std::slice::from_raw_parts(
+            CFDataGetBytePtr(data),
+            CFDataGetLength(data) as usize,
+        ))
+}
+
+// Feature reports 0xBB of the one mouse (receiver or Bluetooth) that exposes the vendor collection.
+struct Hid {
+    managers: Vec<Ref>,
+    sets: Vec<Ref>,
+    device: Ref,
+}
+
+impl Drop for Hid {
+    fn drop(&mut self) {
+        unsafe {
+            for set in &self.sets {
+                CFRelease(*set);
+            }
+            for manager in &self.managers {
+                IOHIDManagerClose(*manager, 0);
+                CFRelease(*manager);
+            }
+        }
+    }
+}
+
+impl Hid {
+    fn open() -> Result<Self, String> {
+        let mut hid = Self {
+            managers: Vec::new(),
+            sets: Vec::new(),
+            device: null(),
+        };
+        let mut found = Vec::new();
+        unsafe {
+            for (vendor, product) in super::COMPATIBLE_IDS {
+                let manager = manager(vendor, product)?;
+                hid.managers.push(manager);
+                open_manager(manager)?;
+                let set = IOHIDManagerCopyDevices(manager);
+                if set.is_null() {
+                    continue;
+                }
+                hid.sets.push(set);
+                let mut devices = vec![null(); CFSetGetCount(set) as usize];
+                CFSetGetValues(set, devices.as_mut_ptr());
+                found.extend(devices.into_iter().filter(|d| has_vendor_collection(*d)));
+            }
+        }
+        match found[..] {
+            [device] => {
+                hid.device = device;
+                Ok(hid)
+            }
+            _ => Err(thumb::AMBIGUOUS.into()),
+        }
+    }
+}
+
+impl FeatureIo for Hid {
+    fn write(&mut self, report: [u8; 8]) -> Result<(), String> {
+        let code =
+            unsafe { IOHIDDeviceSetReport(self.device, FEATURE_REPORT, 0xbb, report.as_ptr(), 8) };
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(format!("QZ30 feature write failed ({code:#x})"))
+        }
+    }
+
+    fn read(&mut self) -> Result<[u8; 8], String> {
+        let (mut report, mut length) = ([0xbb, 0, 0, 0, 0, 0, 0, 0], 8);
+        let code = unsafe {
+            IOHIDDeviceGetReport(
+                self.device,
+                FEATURE_REPORT,
+                0xbb,
+                report.as_mut_ptr(),
+                &mut length,
+            )
+        };
+        if code == 0 && length == 8 {
+            Ok(report)
+        } else {
+            Err(format!("QZ30 feature read failed ({code:#x})"))
+        }
+    }
+}
+
+// Vendor input reports (button 4 frames) from every matching mouse, delivered on the creating thread's run loop.
+struct Listener(Vec<Ref>);
+
+impl Listener {
+    unsafe fn start() -> Result<Self, String> {
+        THUMB_HELD.store(false, Ordering::Release);
+        let mut listener = Self(Vec::new());
+        for (vendor, product) in super::COMPATIBLE_IDS {
+            let manager = manager(vendor, product)?;
+            listener.0.push(manager);
+            IOHIDManagerRegisterInputReportCallback(manager, vendor_report, null_mut());
+            IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+            open_manager(manager)?;
+        }
+        Ok(listener)
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        unsafe {
+            for manager in &self.0 {
+                IOHIDManagerUnscheduleFromRunLoop(
+                    *manager,
+                    CFRunLoopGetCurrent(),
+                    kCFRunLoopDefaultMode,
+                );
+                IOHIDManagerClose(*manager, 0);
+                CFRelease(*manager);
+            }
+        }
+    }
+}
+
+// IOKit includes the report ID in the buffer; accept the frame without it as well.
+fn vendor_frame(report: &[u8]) -> Option<[u8; 8]> {
+    match report.len() {
+        8 if report[0] == 0xbb => report.try_into().ok(),
+        7 => {
+            let mut frame = [0xbb; 8];
+            frame[1..].copy_from_slice(report);
+            Some(frame)
+        }
+        _ => None,
+    }
+}
+
+unsafe extern "C" fn vendor_report(
+    _context: *mut c_void,
+    result: i32,
+    _sender: *mut c_void,
+    kind: u32,
+    id: u32,
+    report: *const u8,
+    length: isize,
+) {
+    if result != 0 || kind != 0 || id != 0xbb || report.is_null() || length <= 0 {
+        return;
+    }
+    let Some(shared) = SHARED.get() else {
+        return;
+    };
+    let Some(frame) = vendor_frame(std::slice::from_raw_parts(report, length as usize)) else {
+        return;
+    };
+    let mut held = THUMB_HELD.load(Ordering::Acquire);
+    let edge = thumb::thumb_edge(&frame, &mut held);
+    THUMB_HELD.store(held, Ordering::Release);
+    if let Some((input, down)) = edge {
+        shared.process(input, down, perform);
+    }
+}
+
 pub struct Hook {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Drop for Hook {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        if let Some(worker) = &self.worker {
+            worker.thread().unpark();
+        }
         if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        if let Some(join) = self.worker.take() {
             let _ = join.join();
         }
     }
@@ -215,6 +482,7 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
     let (sender, receiver) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
+    let worker_shared = shared.clone();
     let join = thread::spawn(move || unsafe {
         let mask = (1 << 22) | (1 << 25) | (1 << 26);
         let tap = CGEventTapCreate(1, 0, 0, mask, callback, null_mut());
@@ -235,9 +503,29 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
         CFRunLoopAddSource(loop_ref, source, kCFRunLoopCommonModes);
         shared.hook_running.store(true, Ordering::Release);
         if sender.send(Ok(())).is_ok() {
+            // Button 4 frames are listened for only while the worker has the mouse in that mode.
+            let (mut listening, mut listener) = (false, None);
             while !thread_stop.load(Ordering::Acquire) {
                 CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+                let ready = shared.thumb_ready.load(Ordering::Acquire);
+                if ready != listening {
+                    listening = ready;
+                    listener = None;
+                    if ready {
+                        match Listener::start() {
+                            Ok(started) => listener = Some(started),
+                            Err(error) => {
+                                shared
+                                    .engine
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .error = Some(error);
+                            }
+                        }
+                    }
+                }
             }
+            drop(listener);
         }
         shared.hook_running.store(false, Ordering::Release);
         shared
@@ -250,10 +538,15 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
         CFRelease(tap);
     });
     match receiver.recv() {
-        Ok(Ok(())) => Ok(Hook {
-            stop,
-            join: Some(join),
-        }),
+        Ok(Ok(())) => {
+            let mut hook = Hook {
+                stop: stop.clone(),
+                join: Some(join),
+                worker: None,
+            };
+            hook.worker = Some(thumb::spawn_worker(worker_shared, stop, Hid::open)?);
+            Ok(hook)
+        }
         Ok(Err(error)) => {
             let _ = join.join();
             Err(error)
@@ -609,6 +902,15 @@ mod tests {
         assert!(compatible(0x32c2, 0x0012));
         assert!(!compatible(0x32c2, 0x1902));
         assert!(!compatible(0x05ac, 0x0012));
+    }
+
+    #[test]
+    fn vendor_frames_are_accepted_with_or_without_the_report_id() {
+        let press = [0xbb, 4, 0, 4, 0, 0, 0, 0x12];
+        assert_eq!(vendor_frame(&press), Some(press));
+        assert_eq!(vendor_frame(&press[1..]), Some(press));
+        assert_eq!(vendor_frame(&press[..6]), None);
+        assert_eq!(vendor_frame(&[0xaa, 4, 0, 4, 0, 0, 0, 0x12]), None);
     }
 
     #[test]

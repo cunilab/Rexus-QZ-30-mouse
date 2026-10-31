@@ -51,3 +51,23 @@ Protocol fake-I/O tests cover malformed/busy replies, challenge matching, cancel
 No global keyboard shortcut remap is added. Firmware, EEPROM and DPI writes remain out of scope. Individual synchronous HID calls have no OS timeout; polling has a finite budget, and the dedicated worker prevents those calls from blocking normal UI/status access. Forced process termination cannot guarantee reset, and exact prior-mask restoration is not claimed.
 
 Earlier Task View success remains historical evidence for another observed state, not proof that cold-start thumb configuration is implemented. The prior keyboard-interference incident's exact trigger also remains unproven.
+
+## Bluetooth LE evidence (macOS, 2026-10-31)
+
+Measured on macOS over Bluetooth LE (`32c2:0012`, "Rexus QZ30-1") with IOKit; selected exact records are in `analysis/THUMB-MODE-EVIDENCE.json` (`bluetooth_macos`).
+
+- The BLE HID report descriptor exposes the same vendor collection as the receiver: usage page `0xffbb`, usage 1, report ID `0xbb`, a 7-byte input report (8 with the ID) and a 7-byte feature report (feature length 8). It also has mouse (report 1), keyboard (2), consumer (3) and system control (4) reports. macOS lists the whole device as one IOHIDDevice whose primary usage is the mouse; the vendor collection appears only in its report descriptor and usage pairs.
+- Idle feature read: `bb00000000000000`. Its checksum is not valid (the XOR seed `12` makes a valid all-zero payload `bb00000000000012`), unlike the receiver's idle `bb000102038445d3`. The shared exchange therefore accepts exactly this buffer as an idle starting state and still requires valid, exact replies for the challenge, command1 and mask acknowledgements.
+- The exact receiver exchange succeeded over BLE with a 100ms wait after each write and 50ms polling: challenge `bb000102038b1b82` returned `bb00010203f31ffe` (valid transform), command1 `bb01000000000013` returned `bb0102010f00001f`, mask on `bb02000000040014` returned the same bytes, and reset `bb02000000000010` returned the same bytes.
+- **Not observed:** thumb press/release input frames over Bluetooth. No physical press was made. The product assumes the same vendor frames as the receiver (`bb04000400000012` press, `bb04000000000016` release); this needs a physical press to confirm.
+
+## Cross-platform implementation
+
+The protocol (packets, validation, `configure`, mode acknowledgement, thumb frame parsing) and the worker state machine (enable when the thumb mapping is non-default and not paused or stopping, `thumb_ready` on acknowledgement, periodic read-only mode check, reset to the OEM default on Pause, Default and Quit, re-initialization on reconnect, reset responsibility retained on failure) live in `src-tauri/src/platform/thumb.rs` and run unchanged on every OS. Each OS supplies only 8-byte feature report `0xbb` I/O and a reader for vendor input frames:
+
+- Windows: `HidD_SetFeature`/`HidD_GetFeature` on the `ffbb:1` collection of `276d:1902` or `32c2:0012`; frames arrive through the existing Raw Input window (Bluetooth contributes only button 4).
+- macOS: `IOHIDDeviceSetReport`/`GetReport` on the one IOHIDDevice whose report descriptor contains the `0xffbb` collection; `IOHIDManager` input report callback on the listener thread's run loop while button 4 mode is active.
+- Linux: `HIDIOCSFEATURE`/`HIDIOCGFEATURE` on the hidraw node whose `HID_ID` is `0003:0000276D:00001902` or `0005:000032C2:00000012` and whose report descriptor contains the `0xffbb` collection; frames are read from the same node.
+
+Exactly one such interface must be present; with both a receiver and a Bluetooth mouse connected, setup fails with a message instead of choosing one. Only the four packet types above are ever sent (challenge, command1, mask on, mask off). Windows, Linux and the macOS write path are covered by unit tests and CI builds, not yet by hardware.
+

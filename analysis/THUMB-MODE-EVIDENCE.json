@@ -64,5 +64,41 @@
                               ],
     "user_confirmation":  "Done — Desktop stopped",
     "oem_cleanup_evidence":  "ev_82fef97a6828be1edd4be24b4e33c6374f361babd2ccef8043afc97632a7b247",
+    "bluetooth_macos":  {
+                            "device":  "macOS / Bluetooth LE 32c2:0012 (Rexus QZ30-1), IOKit",
+                            "date":  "2026-10-31",
+                            "scope":  "IOHIDDeviceSetReport/GetReport feature 0xbb with a 100ms wait then 50ms polling; no physical button press; no firmware, EEPROM or DPI command",
+                            "descriptor":  {
+                                               "vendor_collection":  "usage page 0xffbb usage 1, report ID 0xbb",
+                                               "input_report_bytes":  7,
+                                               "feature_report_bytes":  7,
+                                               "other_reports":  "mouse 1, keyboard 2, consumer 3, system control 4"
+                                           },
+                            "idle_feature_read":  "bb00000000000000",
+                            "idle_checksum_valid":  false,
+                            "exchange":  [
+                                             {
+                                                 "initialization_challenge":  "bb000102038b1b82",
+                                                 "response":  "bb00010203f31ffe"
+                                             },
+                                             {
+                                                 "initialization":  "challenge_validated",
+                                                 "command1":  "bb01000000000013",
+                                                 "device_info":  "bb0102010f00001f"
+                                             },
+                                             {
+                                                 "probe":  "thumb_mask_acknowledged",
+                                                 "mask":  1024,
+                                                 "request":  "bb02000000040014",
+                                                 "response":  "bb02000000040014"
+                                             },
+                                             {
+                                                 "probe":  "oem_default_reset_acknowledged",
+                                                 "request":  "bb02000000000010",
+                                                 "response":  "bb02000000000010"
+                                             }
+                                         ],
+                            "thumb_input_frames":  "not observed over Bluetooth; assumed identical to the receiver frames bb04000400000012 (press) and bb04000000000016 (release)"
+                        },
     "limitations":  "Protocol/input-mode test; integrated app action and lifecycle verification tracked separately in docs/VALIDATION.md."
 }
