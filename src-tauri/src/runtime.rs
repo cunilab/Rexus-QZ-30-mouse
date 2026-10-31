@@ -25,6 +25,17 @@ fn validate(mappings: &Mappings) -> Result<(), String> {
     Ok(())
 }
 
+// Button 4 reports arrive only from the USB receiver; its Bluetooth path is not identified yet.
+fn require_receiver_for_thumb(
+    mappings: &Mappings,
+    devices: &[crate::Device],
+) -> Result<(), String> {
+    if mappings.thumb != crate::Action::Default && !devices.iter().any(platform::is_receiver) {
+        return Err("Button 4 over Bluetooth is not supported yet; use the USB receiver.".into());
+    }
+    Ok(())
+}
+
 fn prepare(
     state: &AppState,
     hook: &mut Option<platform::Hook>,
@@ -46,8 +57,11 @@ fn prepare(
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if inventory.devices.is_empty() {
-            return Err(inventory.error.clone().unwrap_or_else(|| "Connect the compatible USB receiver. Bluetooth identification is not verified yet.".into()));
+            return Err(inventory.error.clone().unwrap_or_else(|| {
+                "Connect the compatible USB receiver or pair the QZ30 over Bluetooth.".into()
+            }));
         }
+        require_receiver_for_thumb(mappings, &inventory.devices)?;
         drop(inventory);
         if platform::permission() != "granted" {
             return Err(
@@ -205,6 +219,37 @@ mod tests {
             settings_path: "unused.json".into(),
         }
     }
+    #[test]
+    fn thumb_needs_the_usb_receiver_not_bluetooth() {
+        let device = |vendor_id, product_id| crate::Device {
+            vendor_id,
+            product_id,
+            name: String::new(),
+            transport: String::new(),
+        };
+        let ble = [device(
+            platform::BLUETOOTH_VENDOR,
+            platform::BLUETOOTH_PRODUCT,
+        )];
+        let both = [
+            ble[0].clone(),
+            device(platform::RECEIVER_VENDOR, platform::RECEIVER_PRODUCT),
+        ];
+        let thumb = Mappings {
+            thumb: Action::VolumeUp,
+            ..Mappings::default()
+        };
+        assert!(require_receiver_for_thumb(&thumb, &ble)
+            .unwrap_err()
+            .contains("Button 4 over Bluetooth is not supported yet"));
+        assert!(require_receiver_for_thumb(&thumb, &both).is_ok());
+        let back = Mappings {
+            back: Action::Copy,
+            ..Mappings::default()
+        };
+        assert!(require_receiver_for_thumb(&back, &ble).is_ok());
+    }
+
     #[cfg(windows)]
     #[test]
     fn disable_rejects_raw_receiver_inputs_but_accepts_os_buttons() {

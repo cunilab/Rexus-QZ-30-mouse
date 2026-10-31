@@ -133,22 +133,63 @@ pub fn devices() -> Result<Vec<Device>, String> {
                 continue;
             }
             let path = String::from_utf16_lossy(&name).to_ascii_uppercase();
-            if compatible_path(&path) && devices.is_empty() {
-                devices.push(Device {
-                    vendor_id: super::RECEIVER_VENDOR,
-                    product_id: super::RECEIVER_PRODUCT,
-                    name: "QZ30-compatible USB receiver".into(),
-                    transport: "USB / 2.4 GHz receiver".into(),
-                });
+            if let Some(device) = classify(&path) {
+                if !devices.iter().any(|known| {
+                    (known.vendor_id, known.product_id) == (device.vendor_id, device.product_id)
+                }) {
+                    devices.push(device);
+                }
             }
         }
         Ok(devices)
     }
 }
 
+fn classify(path: &str) -> Option<Device> {
+    if compatible_path(path) {
+        Some(Device {
+            vendor_id: super::RECEIVER_VENDOR,
+            product_id: super::RECEIVER_PRODUCT,
+            name: "QZ30-compatible USB receiver".into(),
+            transport: "USB / 2.4 GHz receiver".into(),
+        })
+    } else if bluetooth_path(path) {
+        Some(Device {
+            vendor_id: super::BLUETOOTH_VENDOR,
+            product_id: super::BLUETOOTH_PRODUCT,
+            name: "Rexus QZ30".into(),
+            transport: "Bluetooth LE".into(),
+        })
+    } else {
+        None
+    }
+}
+
+// USB receiver only: trace and the receiver worker rely on this never matching Bluetooth.
 fn compatible_path(path: &str) -> bool {
     path.split(['&', '#', '\\']).any(|part| part == "VID_276D")
         && path.split(['&', '#', '\\']).any(|part| part == "PID_1902")
+}
+
+// BLE HID paths: `HID#{HID service UUID}_DEV_VID&<source><vendor>_PID&<product>_REV&...`, where
+// source 01 is the Bluetooth SIG and 02 the USB-IF vendor ID space.
+fn bluetooth_path(path: &str) -> bool {
+    let path = path.to_ascii_uppercase();
+    let field = |tag: &str| {
+        let rest = &path[path.find(tag)? + tag.len()..];
+        Some(
+            &rest[..rest
+                .find(|c: char| !c.is_ascii_hexdigit())
+                .unwrap_or(rest.len())],
+        )
+    };
+    path.contains("HID#{00001812-0000-1000-8000-00805F9B34FB}")
+        && field("_VID&").is_some_and(|vid| {
+            vid.len() == 6
+                && matches!(&vid[..2], "01" | "02")
+                && vid[2..] == format!("{:04X}", super::BLUETOOTH_VENDOR)
+        })
+        && field("_PID&").is_some_and(|pid| pid == format!("{:04X}", super::BLUETOOTH_PRODUCT))
 }
 
 pub fn permission() -> &'static str {
@@ -394,7 +435,8 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
                                 receiver::set_thumb_mode(enabled, cancel)
                             },
                             |owned_mode| {
-                                if devices()?.is_empty() {
+                                // A Bluetooth mouse must not keep receiver setup alive or be configured.
+                                if !devices()?.iter().any(super::is_receiver) {
                                     Ok(None)
                                 } else if !owned_mode {
                                     // The last feature reply need not be a mask before initialization.
@@ -1189,6 +1231,47 @@ mod tests {
         assert!(!compatible_path(r"\\?\HID#VID_276D&PID_1903"));
         assert!(!compatible_path(r"\\?\HID#VID_276D&PID_19020"));
         assert!(!compatible_path(""));
+        assert!(!compatible_path(
+            r"\\?\HID#{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&0232C2_PID&0012_REV&0001"
+        ));
+    }
+
+    #[test]
+    fn matches_only_the_observed_bluetooth_pair() {
+        let ble = |vid: &str, pid: &str| {
+            format!(
+                r"\\?\HID#{{00001812-0000-1000-8000-00805f9b34fb}}_Dev_VID&{vid}_PID&{pid}_REV&0001_a1b2c3d4e5f6#8&1d2e3f4a&0&0000#{{4d1e55b2-f16f-11cf-88cb-001111000030}}"
+            )
+        };
+        assert!(bluetooth_path(&ble("0232c2", "0012")));
+        assert!(bluetooth_path(&ble("0132C2", "0012")));
+        assert!(bluetooth_path(
+            &ble("0232c2", "0012").replace("_REV&0001", "_REV&0001&Col02")
+        ));
+        assert!(!bluetooth_path(&ble("0232c2", "00120")));
+        assert!(!bluetooth_path(&ble("0232c2", "0013")));
+        assert!(!bluetooth_path(&ble("0232C3", "0012")));
+        assert!(!bluetooth_path(&ble("0332c2", "0012")));
+        assert!(!bluetooth_path(&ble("32c2", "0012")));
+        assert!(!bluetooth_path(&ble("00232c2", "0012")));
+        assert!(!bluetooth_path(r"\\?\HID#VID_32C2&PID_0012&MI_00"));
+        assert!(!bluetooth_path(r"\\?\HID#VID_276D&PID_1902&MI_01"));
+        assert!(!bluetooth_path(""));
+    }
+
+    #[test]
+    fn classification_reports_real_ids_and_transport() {
+        let receiver = classify(r"\\?\HID#VID_276D&PID_1902&MI_01").unwrap();
+        assert_eq!((receiver.vendor_id, receiver.product_id), (0x276d, 0x1902));
+        assert!(super::super::is_receiver(&receiver));
+        let ble = classify(
+            r"\\?\HID#{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&0232C2_PID&0012_REV&0001",
+        )
+        .unwrap();
+        assert_eq!((ble.vendor_id, ble.product_id), (0x32c2, 0x0012));
+        assert_eq!(ble.transport, "Bluetooth LE");
+        assert!(!super::super::is_receiver(&ble));
+        assert!(classify(r"\\?\HID#VID_05AC&PID_0012").is_none());
     }
     #[test]
     fn copy_and_paste_use_control_and_distinct_keys() {

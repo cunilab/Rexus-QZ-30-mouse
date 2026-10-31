@@ -8,25 +8,25 @@ An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Wi
 
 Open `dist/windows/QZ Flow.exe` after building or extracting the Windows artifact.
 
-1. Connect the mouse's USB receiver. Bluetooth identification is not verified.
+1. Connect the mouse's USB receiver, or pair the QZ30 over Bluetooth LE (works on Windows, macOS and Linux). Button 4 needs the USB receiver.
 2. Quit the original Mouse Assistant from its system tray menu. QZ Flow refuses to activate mappings while that utility is running.
-3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 currently requires Windows and the USB receiver.
+3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 currently requires Windows and the USB receiver; over Bluetooth it is rejected when saving.
 4. Test a simple action, such as Back ? Copy, in a disposable text document. You can edit while mappings run; changes take effect only after Save.
 5. Use the tray menu to **Pause/Resume mappings** or **Quit**. Close hides the window; Minimize keeps the normal Windows behavior. Open **Settings** in the sidebar for **Launch at login** and window-behavior details. Login launches start hidden.
 
-Saved assignments restore automatically after prerequisite checks. Receiver loss suspends mappings, and reconnection can restore them (checked every two seconds). Explicit Pause persists across restarts and reconnections; Save and apply resumes mappings. Default-only assignments require no receiver.
+Saved assignments restore automatically after prerequisite checks. Receiver or Bluetooth loss suspends mappings, and reconnection can restore them (checked every two seconds). Explicit Pause persists across restarts and reconnections; Save and apply resumes mappings. Default-only assignments require no receiver.
 
 Active mappings apply to **all mice and trackpads on this computer**, not exclusively the QZ30. A receiver being present does not prove that the mouse is powered on, and its USB ID is shared by several OEM models.
 
 Actions are grouped into Mouse, Editing, Desktop and windows, Browser and tabs, Media, Zoom and capture, and Custom. Click a mouse marker to select its editor. Custom shortcuts can be selected manually or recorded while QZ Flow has focus; application assignments use a native picker. Save and apply activates the draft. See [action behavior and verification](docs/ACTIONS.md).
 
-Primary left/right click and vertical scrolling are left alone. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS requires horizontal OS scroll events and has no thumb-rest support. Disable is unavailable for Windows raw receiver wheel/thumb inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
+Primary left/right click and vertical scrolling are left alone. Over Bluetooth, Middle, Back, Forward and horizontal scroll are ordinary OS mouse events on every platform; the Windows button 4 and receiver wheel frames are USB-receiver-only. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS requires horizontal OS scroll events and has no thumb-rest support. Disable is unavailable for Windows raw receiver wheel/thumb inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
 
 ## Use on Linux
 
-Linux reads the receiver's `/dev/input/event*` device and re-emits all unmapped events through a `uinput` virtual mouse, so it works on X11 and Wayland. Both need permissions that ordinary users do not have by default:
+Linux reads the QZ30's `/dev/input/event*` device (the USB receiver, or the Bluetooth LE mouse that BlueZ exposes through `uhid`) and re-emits all unmapped events through a `uinput` virtual mouse, so it works on X11 and Wayland. Both need permissions that ordinary users do not have by default:
 
-1. Install the udev rule, then replug the receiver:
+1. Install the udev rule, then replug the receiver or reconnect Bluetooth:
 
    ```sh
    sudo cp packaging/linux/70-qz-flow.rules /etc/udev/rules.d/
@@ -34,8 +34,8 @@ Linux reads the receiver's `/dev/input/event*` device and re-emits all unmapped 
    echo uinput | sudo tee /etc/modules-load.d/uinput.conf && sudo modprobe uinput
    ```
 
-   Sign out and in if `/dev/uinput` is still not writable. QZ Flow shows **Open input permissions** until the receiver's node is readable and `/dev/uinput` is writable; that button only explains these steps because Linux has no permission dialog.
-2. Mappings grab only the QZ30 receiver's pointer device, not every mouse. Keyboard shortcuts and media keys are sent through a virtual keyboard. Unsupported actions (Show desktop, Minimize, Maximize) are rejected when saving; see [action behavior](docs/ACTIONS.md).
+   Sign out and in if `/dev/uinput` is still not writable. QZ Flow shows **Open input permissions** until the mouse's node is readable and `/dev/uinput` is writable; that button only explains these steps because Linux has no permission dialog.
+2. Mappings grab only the QZ30's pointer device (receiver or Bluetooth), not every mouse. Keyboard shortcuts and media keys are sent through a virtual keyboard. Unsupported actions (Show desktop, Minimize, Maximize) are rejected when saving; see [action behavior](docs/ACTIONS.md).
 3. Button 4 (thumb rest), shortcut recording and window actions are unavailable. Choose keys manually for custom shortcuts. **Choose application** needs `zenity` or `kdialog`.
 4. The tray icon needs an AppIndicator-capable desktop (GNOME needs the AppIndicator extension). Without a tray, start QZ Flow again to reopen its window. Launch at login writes `~/.config/autostart/dev.qzflow.desktop`.
 
@@ -84,7 +84,7 @@ For recovery or downgrade, Quit QZ Flow, copy the current file somewhere safe, t
 - `ui/`: plain HTML, CSS, and JavaScript; no frontend framework or external assets.
 - `src-tauri/src/engine.rs`: shared mapping and press/release state.
 - `src-tauri/src/platform/`: Win32, macOS and Linux (evdev/uinput) inventory/hooks.
-- `packaging/linux/`: udev rule granting the receiver and `/dev/uinput` access.
+- `packaging/linux/`: udev rule granting the receiver, Bluetooth mouse and `/dev/uinput` access.
 - `tests/ui.test.cjs`: interface state/race tests using mocked native calls.
 - `analysis/ASSESSMENT.md`: REA findings from the supplied vendor packages.
 - `docs/VALIDATION.md`: actual checks and unresolved hardware work.

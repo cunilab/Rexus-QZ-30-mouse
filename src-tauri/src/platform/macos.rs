@@ -133,24 +133,30 @@ pub fn devices() -> Result<Vec<Device>, String> {
             if device == 0 {
                 break;
             }
-            if number(device, "VendorID") == Some(super::RECEIVER_VENDOR)
-                && number(device, "ProductID") == Some(super::RECEIVER_PRODUCT)
-                && found.is_empty()
+            if let (Some(vendor_id), Some(product_id)) =
+                (number(device, "VendorID"), number(device, "ProductID"))
             {
-                found.push(Device {
-                    vendor_id: super::RECEIVER_VENDOR,
-                    product_id: super::RECEIVER_PRODUCT,
-                    name: string(device, "Product")
-                        .unwrap_or_else(|| "QZ30-compatible USB receiver".into()),
-                    transport: string(device, "Transport")
-                        .unwrap_or_else(|| "USB / 2.4 GHz receiver".into()),
-                });
+                if found.is_empty() && compatible(vendor_id, product_id) {
+                    found.push(Device {
+                        vendor_id,
+                        product_id,
+                        name: string(device, "Product")
+                            .unwrap_or_else(|| "QZ30-compatible USB receiver".into()),
+                        transport: string(device, "Transport")
+                            .unwrap_or_else(|| "USB / 2.4 GHz receiver".into()),
+                    });
+                }
             }
             IOObjectRelease(device);
         }
         IOObjectRelease(iterator);
         Ok(found)
     }
+}
+
+fn compatible(vendor_id: u16, product_id: u16) -> bool {
+    (vendor_id, product_id) == (super::RECEIVER_VENDOR, super::RECEIVER_PRODUCT)
+        || (vendor_id, product_id) == (super::BLUETOOTH_VENDOR, super::BLUETOOTH_PRODUCT)
 }
 
 pub fn permission() -> &'static str {
@@ -597,6 +603,14 @@ fn media_key_event(key: isize) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn receiver_and_bluetooth_identities_are_compatible() {
+        assert!(compatible(0x276d, 0x1902));
+        assert!(compatible(0x32c2, 0x0012));
+        assert!(!compatible(0x32c2, 0x1902));
+        assert!(!compatible(0x05ac, 0x0012));
+    }
+
     #[test]
     fn shortcuts_use_command_and_redo_adds_shift() {
         assert_eq!(shortcut(&Action::Copy).unwrap(), (8, COMMAND));

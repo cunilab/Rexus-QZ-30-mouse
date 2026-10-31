@@ -153,6 +153,14 @@ test("original numbering and actions follow native thumb availability", async ()
   assert.equal(app.get("mapping-thumb").disabled, true);
 });
 
+test("a Bluetooth-only mouse is named as such with its real device name", async () => {
+  const { app } = nativeApp({ devices: [{ name: "Rexus QZ30", transport: "Bluetooth LE" }] });
+  await tick();
+  assert.equal(app.get("receiver-status").textContent, "Bluetooth mouse detected");
+  assert.match(app.get("receiver-detail").textContent, /Rexus QZ30 .* USB receiver/);
+  assert.equal(app.get("connection").textContent, "Bluetooth LE");
+});
+
 test("saving applies immediately and active mappings stay editable as drafts", async () => {
   const native = nativeApp();
   const { app, calls } = native;

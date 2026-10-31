@@ -1,5 +1,7 @@
-# QZ Flow: give the logged-in user access to the QZ30 receiver's input nodes and to /dev/uinput.
+# QZ Flow: give the logged-in user access to the QZ30 (USB receiver or Bluetooth LE) input nodes and to /dev/uinput.
 # Install: sudo cp 70-qz-flow.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
-# Then replug the receiver (and sign out and in if /dev/uinput is still not writable).
+# Then replug the receiver or reconnect Bluetooth (and sign out and in if /dev/uinput is still not writable).
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="276d", ATTRS{id/product}=="1902", TAG+="uaccess"
+# Bluetooth LE: BlueZ creates the input device through uhid; its input node still carries id/vendor and id/product.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="32c2", ATTRS{id/product}=="0012", TAG+="uaccess"
 KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"

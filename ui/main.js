@@ -129,12 +129,13 @@ function acceptStatus(next, adoptMappings = false) {
 function render() {
   const preview = !invoke;
   const detected = Boolean(status?.devices?.length);
+  const bluetoothOnly = detected && status.devices.every((device) => /bluetooth/i.test(device.transport || ""));
   const dirty = isDirty();
   const retry = status?.paused === true || status?.mapping_state === "unavailable";
   const unavailable = preview || !initialized || connectionFailed;
   byId("preview").hidden = !preview;
-  byId("receiver-status").textContent = preview ? "Interface preview" : connectionFailed ? "Connection unavailable" : detected ? "Compatible receiver detected" : initialized ? "No compatible receiver detected" : "Checking receiver…";
-  byId("receiver-detail").textContent = preview ? "Open the desktop app to connect." : connectionFailed ? "Retrying the desktop connection automatically." : detected ? "Receiver present · mouse power is not verified" : "Connect your QZ30 receiver to get started.";
+  byId("receiver-status").textContent = preview ? "Interface preview" : connectionFailed ? "Connection unavailable" : detected ? (bluetoothOnly ? "Bluetooth mouse detected" : "Compatible receiver detected") : initialized ? "No compatible receiver or Bluetooth mouse detected" : "Checking receiver…";
+  byId("receiver-detail").textContent = preview ? "Open the desktop app to connect." : connectionFailed ? "Retrying the desktop connection automatically." : detected ? (bluetoothOnly ? `${status.devices[0].name || "QZ30"} · button 4 needs the USB receiver` : "Receiver present · mouse power is not verified") : "Connect your QZ30 receiver or pair it over Bluetooth to get started.";
   byId("receiver-dot").classList.toggle("connected", detected && !connectionFailed);
   byId("connection").textContent = detected ? status.devices.map((device) => device.transport || "USB").filter((value, index, all) => all.indexOf(value) === index).join(", ") : "—";
   byId("last-input").textContent = status?.last_input || "No input yet";

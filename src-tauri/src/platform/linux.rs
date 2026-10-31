@@ -41,12 +41,13 @@ const APPIMAGE_ENV: [&str; 12] = [
     "PYTHONPATH",
     "QT_PLUGIN_PATH",
 ];
-const SETUP_HINT: &str = "Install packaging/linux/70-qz-flow.rules as described in the README, replug the receiver, then sign out and in.";
+const SETUP_HINT: &str = "Install packaging/linux/70-qz-flow.rules as described in the README, replug the receiver or reconnect Bluetooth, then sign out and in.";
 
 struct Node {
     path: PathBuf,
     name: String,
     pointer: bool,
+    bluetooth: bool,
 }
 
 // sysfs files hold hexadecimal words, most significant first; the last word has the low bits.
@@ -62,15 +63,28 @@ fn has_relative_axes(event_types: u64) -> bool {
     event_types & (1 << EventType::RELATIVE.0) != 0
 }
 
-fn is_receiver(bus: Option<u64>, vendor: Option<u64>, product: Option<u64>, name: &str) -> bool {
-    vendor == Some(super::RECEIVER_VENDOR.into())
-        && product == Some(super::RECEIVER_PRODUCT.into())
+fn is_bluetooth(vendor: Option<u64>, product: Option<u64>) -> bool {
+    (vendor, product)
+        == (
+            Some(super::BLUETOOTH_VENDOR.into()),
+            Some(super::BLUETOOTH_PRODUCT.into()),
+        )
+}
+
+// BlueZ exposes the BLE mouse through uhid with bustype 0x05 and the same vendor/product IDs.
+fn is_compatible(bus: Option<u64>, vendor: Option<u64>, product: Option<u64>, name: &str) -> bool {
+    (is_bluetooth(vendor, product)
+        || (vendor, product)
+            == (
+                Some(super::RECEIVER_VENDOR.into()),
+                Some(super::RECEIVER_PRODUCT.into()),
+            ))
         && bus != Some(BusType::BUS_VIRTUAL.0.into())
         && !name.starts_with(VIRTUAL_PREFIX)
 }
 
-// sysfs is world-readable, so the receiver is found even before /dev/input access is granted.
-fn receiver_nodes() -> Result<Vec<Node>, String> {
+// sysfs is world-readable, so the mouse is found even before /dev/input access is granted.
+fn compatible_nodes() -> Result<Vec<Node>, String> {
     let entries = fs::read_dir(SYSFS_INPUT)
         .map_err(|error| format!("Linux could not list input devices: {error}"))?;
     let mut nodes = Vec::new();
@@ -85,11 +99,12 @@ fn receiver_nodes() -> Result<Vec<Node>, String> {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        if is_receiver(id("bustype"), id("vendor"), id("product"), &name) {
+        if is_compatible(id("bustype"), id("vendor"), id("product"), &name) {
             nodes.push(Node {
                 path: Path::new("/dev/input").join(file),
                 name,
                 pointer: read_hex(&device.join("capabilities/ev")).is_some_and(has_relative_axes),
+                bluetooth: is_bluetooth(id("vendor"), id("product")),
             });
         }
     }
@@ -97,23 +112,39 @@ fn receiver_nodes() -> Result<Vec<Node>, String> {
     Ok(nodes)
 }
 
+// One entry per link (receiver, Bluetooth), each from its pointer node when it has one.
 pub fn devices() -> Result<Vec<Device>, String> {
-    let nodes = receiver_nodes()?;
-    Ok(nodes
-        .iter()
-        .find(|node| node.pointer)
-        .or(nodes.first())
-        .map(|node| Device {
-            vendor_id: super::RECEIVER_VENDOR,
-            product_id: super::RECEIVER_PRODUCT,
-            name: if node.name.is_empty() {
-                "QZ30-compatible USB receiver".into()
-            } else {
-                node.name.clone()
-            },
-            transport: "USB / 2.4 GHz receiver".into(),
-        })
+    let nodes = compatible_nodes()?;
+    Ok([false, true]
         .into_iter()
+        .filter_map(|bluetooth| {
+            let kind: Vec<_> = nodes.iter().filter(|n| n.bluetooth == bluetooth).collect();
+            let node = kind.iter().find(|n| n.pointer).or(kind.first())?;
+            Some(Device {
+                vendor_id: if bluetooth {
+                    super::BLUETOOTH_VENDOR
+                } else {
+                    super::RECEIVER_VENDOR
+                },
+                product_id: if bluetooth {
+                    super::BLUETOOTH_PRODUCT
+                } else {
+                    super::RECEIVER_PRODUCT
+                },
+                name: if !node.name.is_empty() {
+                    node.name.clone()
+                } else if bluetooth {
+                    "Rexus QZ30".into()
+                } else {
+                    "QZ30-compatible USB receiver".into()
+                },
+                transport: if bluetooth {
+                    "Bluetooth LE".into()
+                } else {
+                    "USB / 2.4 GHz receiver".into()
+                },
+            })
+        })
         .collect())
 }
 
@@ -127,7 +158,7 @@ fn access_granted(nodes: &[Node], readable: impl Fn(&Path) -> bool, uinput_writa
 
 pub fn permission() -> &'static str {
     let uinput = fs::OpenOptions::new().write(true).open(UINPUT).is_ok();
-    let nodes = receiver_nodes().unwrap_or_default();
+    let nodes = compatible_nodes().unwrap_or_default();
     if access_granted(&nodes, |path| fs::File::open(path).is_ok(), uinput) {
         "granted"
     } else {
@@ -251,16 +282,18 @@ fn virtual_keyboard() -> Result<VirtualDevice, String> {
 pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
     if permission() != "granted" {
         return Err(format!(
-            "QZ Flow cannot open the receiver or /dev/uinput. {SETUP_HINT}"
+            "QZ Flow cannot open the mouse or /dev/uinput. {SETUP_HINT}"
         ));
     }
     let _ = SHARED.set(shared.clone());
-    let nodes: Vec<_> = receiver_nodes()?
+    let nodes: Vec<_> = compatible_nodes()?
         .into_iter()
         .filter(|node| node.pointer)
         .collect();
     if nodes.is_empty() {
-        return Err("The receiver's mouse input was not found. Replug the receiver.".into());
+        return Err(
+            "The mouse input was not found. Replug the receiver or reconnect Bluetooth.".into(),
+        );
     }
     let mut pairs = nodes
         .iter()
@@ -274,7 +307,7 @@ pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
             .map_err(|e| e.to_string())?;
         pair.device
             .grab()
-            .map_err(|error| format!("Could not take exclusive control of the receiver ({error}). Another program may be using it."))?;
+            .map_err(|error| format!("Could not take exclusive control of the mouse ({error}). Another program may be using it."))?;
     }
     *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(keyboard);
     let stop = Arc::new(AtomicBool::new(false));
@@ -774,13 +807,28 @@ mod tests {
         assert!(has_relative_axes(0x17));
         assert!(!has_relative_axes(0x13));
         let (v, p) = (Some(0x276d), Some(0x1902));
-        assert!(is_receiver(Some(3), v, p, "Rexus Mouse"));
-        assert!(!is_receiver(Some(3), v, Some(0x1903), "Rexus Mouse"));
-        assert!(!is_receiver(Some(3), Some(0x276e), p, "Rexus Mouse"));
-        assert!(!is_receiver(Some(3), None, None, "Rexus Mouse"));
+        assert!(is_compatible(Some(3), v, p, "Rexus Mouse"));
+        assert!(!is_compatible(Some(3), v, Some(0x1903), "Rexus Mouse"));
+        assert!(!is_compatible(Some(3), Some(0x276e), p, "Rexus Mouse"));
+        assert!(!is_compatible(Some(3), None, None, "Rexus Mouse"));
         // Our own virtual mouse mirrors the receiver's IDs but must never be rediscovered.
-        assert!(!is_receiver(Some(6), v, p, "Rexus Mouse"));
-        assert!(!is_receiver(Some(3), v, p, MOUSE_NAME));
+        assert!(!is_compatible(Some(6), v, p, "Rexus Mouse"));
+        assert!(!is_compatible(Some(3), v, p, MOUSE_NAME));
+    }
+
+    #[test]
+    fn bluetooth_identity_is_accepted_over_the_bluetooth_bus_only_as_exact_ids() {
+        let (v, p) = (Some(0x32c2), Some(0x0012));
+        assert!(is_compatible(Some(5), v, p, "Rexus QZ30"));
+        assert!(is_bluetooth(v, p));
+        assert!(!is_bluetooth(Some(0x276d), Some(0x1902)));
+        assert!(!is_compatible(Some(5), v, Some(0x0013), "Rexus QZ30"));
+        assert!(!is_compatible(Some(5), Some(0x32c3), p, "Rexus QZ30"));
+        assert!(!is_compatible(Some(5), v, Some(0x1902), "Rexus QZ30"));
+        // Mixed pairs of the two identities must not match.
+        assert!(!is_compatible(Some(5), Some(0x276d), p, "Rexus QZ30"));
+        assert!(!is_compatible(Some(6), v, p, "Rexus QZ30"));
+        assert!(!is_compatible(Some(5), v, p, MOUSE_NAME));
     }
 
     #[test]
@@ -789,6 +837,7 @@ mod tests {
             path: name.into(),
             name: String::new(),
             pointer,
+            bluetooth: false,
         };
         let nodes = [
             node("/dev/input/event1", true),

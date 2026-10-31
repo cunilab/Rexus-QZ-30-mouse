@@ -6,6 +6,7 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ### Added
 
+- Bluetooth LE recognition on Windows, macOS and Linux (`32c2:0012`, "Rexus QZ30"), alongside the USB receiver. Back, Forward, Middle and horizontal scroll use ordinary OS events; Windows receiver I/O (button 4 setup, side-wheel frames) stays USB-only, and a non-default button 4 over Bluetooth is rejected with a clear message. The Linux udev rule now also covers `32c2:0012`. Windows and Linux Bluetooth behavior is unverified on hardware.
 - Linux support (x86_64): the receiver's evdev pointer device is grabbed and re-emitted through a `uinput` virtual mouse, so Back, Forward, Middle and the side wheel can be remapped or disabled on X11 and Wayland. Shortcuts and media keys use a virtual keyboard. A udev rule (`packaging/linux/70-qz-flow.rules`) grants access; see the README.
 - Linux AppImage and `.deb` release builds with signed updater artifacts, and a Linux job in the desktop checks.
 - Linux input hardening: the listener status is cleared even if the reader thread panics, a failed key release recreates the virtual keyboard so no modifier stays held, side-wheel tilt fires once per notch on high-resolution devices, and launched programs do not inherit AppImage environment variables.

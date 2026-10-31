@@ -66,7 +66,7 @@ Native REA evidence: initial application `ev_fb459425d478357a66e11b2ee10b4e1f4fc
 
 - Actual QZ30 side-button and thumb-wheel events with Mouse Assistant closed, and a reversible remap in a disposable document. The original utility was left running and untouched.
 - macOS native build, permissions, HID registry values, button numbering, shortcuts and event-tap lifecycle on real hardware. Cross-compilation from this Windows host failed in a dependency needing an Apple native compiler. The CI definition is present but has not run remotely.
-- Bluetooth discovery and model-specific HID/vendor commands are not implemented. DPI/report-rate/macros/firmware controls remain outside this first slice.
+- Bluetooth discovery is implemented from measured IDs (BLE `32c2:0012`: macOS IOKit; Windows `HID#{00001812-...}_DEV_VID&0232C2_PID&0012` paths and Linux `bustype 0x05` uhid input nodes follow the documented formats) but the Windows and Linux paths are verified only by unit tests and CI builds, not on hardware; button 4 over Bluetooth is rejected until its input path is captured. Model-specific HID/vendor commands are not implemented. DPI/report-rate/macros/firmware controls remain outside this first slice.
 - The OS-level listener is global. Elevated Windows applications can reject synthetic shortcuts. Natural scrolling, non-US keyboard layouts and simultaneous multiple-mouse button presses need additional hardware validation.
 
 ## Review and limits
