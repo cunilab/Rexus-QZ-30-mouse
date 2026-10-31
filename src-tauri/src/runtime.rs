@@ -221,6 +221,22 @@ mod tests {
     }
 
     #[test]
+    fn missing_but_well_formed_launch_target_does_not_block_mappings() {
+        let path = if cfg!(windows) {
+            r"C:\qz-flow-missing\app.exe"
+        } else if cfg!(target_os = "macos") {
+            "/Applications/QZ Flow Missing.app"
+        } else {
+            "/opt/qz-flow-missing/app"
+        };
+        let mappings = Mappings {
+            back: Action::LaunchApplication { path: path.into() },
+            ..Mappings::default()
+        };
+        validate(&mappings).unwrap();
+    }
+
+    #[test]
     fn failed_preparation_or_save_retains_assignments_and_pause() {
         let state = state();
         state.shared.engine.lock().unwrap().paused = true;

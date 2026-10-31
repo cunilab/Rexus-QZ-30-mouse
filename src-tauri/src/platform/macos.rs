@@ -133,13 +133,13 @@ pub fn devices() -> Result<Vec<Device>, String> {
             if device == 0 {
                 break;
             }
-            if number(device, "VendorID") == Some(0x276d)
-                && number(device, "ProductID") == Some(0x1902)
+            if number(device, "VendorID") == Some(super::RECEIVER_VENDOR)
+                && number(device, "ProductID") == Some(super::RECEIVER_PRODUCT)
                 && found.is_empty()
             {
                 found.push(Device {
-                    vendor_id: 0x276d,
-                    product_id: 0x1902,
+                    vendor_id: super::RECEIVER_VENDOR,
+                    product_id: super::RECEIVER_PRODUCT,
                     name: string(device, "Product")
                         .unwrap_or_else(|| "QZ30-compatible USB receiver".into()),
                     transport: string(device, "Transport")
@@ -439,21 +439,27 @@ fn custom_key(key: &str) -> Option<u16> {
     })
 }
 
-fn validate_application(path: &str) -> Result<(), String> {
+fn validate_application_shape(path: &str) -> Result<(), String> {
     let path = std::path::Path::new(path);
-    if !path.is_absolute()
-        || !path.is_dir()
-        || path.extension().is_none_or(|extension| extension != "app")
-        || !path.join("Contents/Info.plist").is_file()
-    {
-        return Err("Choose an existing application with an absolute .app path.".into());
+    if !path.is_absolute() || path.extension().is_none_or(|extension| extension != "app") {
+        return Err("Choose an application with an absolute .app path.".into());
+    }
+    Ok(())
+}
+
+fn validate_application(path: &str) -> Result<(), String> {
+    validate_application_shape(path)?;
+    let path = std::path::Path::new(path);
+    if !path.is_dir() || !path.join("Contents/Info.plist").is_file() {
+        return Err("The selected application no longer exists. Choose it again.".into());
     }
     Ok(())
 }
 
 pub fn validate_action(action: &Action) -> Result<(), String> {
     match action {
-        Action::LaunchApplication { path } => validate_application(path),
+        // Existence is checked when picking and pressing, so a missing app never disables other mappings.
+        Action::LaunchApplication { path } => validate_application_shape(path),
         Action::VolumeUp
         | Action::VolumeDown
         | Action::Mute
@@ -628,6 +634,8 @@ mod tests {
         assert_eq!(media_key(&Action::PlayPause), Some(16));
         assert_eq!(media_key(&Action::PreviousTrack), Some(18));
         assert!(validate_application("Safari.app").is_err());
+        assert!(validate_application_shape("/Missing/Gone.app").is_ok());
+        assert!(validate_application("/Missing/Gone.app").is_err());
         assert!(validate_application("/Applications/Safari.app --args -c bad").is_err());
         assert_eq!(shortcut(&Action::PreviousDesktop).unwrap(), (123, CONTROL));
         assert_eq!(shortcut(&Action::NextDesktop).unwrap(), (124, CONTROL));

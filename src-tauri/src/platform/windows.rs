@@ -29,6 +29,7 @@ use windows_sys::Win32::{
         Input::{
             GetRawInputDeviceInfoW, GetRawInputDeviceList, RAWINPUTDEVICELIST, RIDI_DEVICENAME,
         },
+        Shell::ShellExecuteW,
         WindowsAndMessaging::*,
     },
 };
@@ -134,8 +135,8 @@ pub fn devices() -> Result<Vec<Device>, String> {
             let path = String::from_utf16_lossy(&name).to_ascii_uppercase();
             if compatible_path(&path) && devices.is_empty() {
                 devices.push(Device {
-                    vendor_id: 0x276d,
-                    product_id: 0x1902,
+                    vendor_id: super::RECEIVER_VENDOR,
+                    product_id: super::RECEIVER_PRODUCT,
                     name: "QZ30-compatible USB receiver".into(),
                     transport: "USB / 2.4 GHz receiver".into(),
                 });
@@ -509,59 +510,16 @@ fn shortcut(action: &Action) -> Result<Vec<u16>, String> {
                 }
                 keys.push(code);
             }
-            keys.push(custom_key(key).ok_or_else(|| format!("Unsupported shortcut key: {key}"))?);
+            if custom_scan(key).is_none() {
+                return Err(format!("Unsupported shortcut key: {key}"));
+            }
+            // Placeholder: perform sends the key's scan code and maps it to a VK for the held-key check.
+            keys.push(0);
             keys
         }
         Action::Minimize | Action::Maximize | Action::LaunchApplication { .. } => {
             return Err("This action does not use a keyboard shortcut.".into());
         }
-    })
-}
-
-fn custom_key(key: &str) -> Option<u16> {
-    if let Some(letter) = key.strip_prefix("Key").filter(|s| s.len() == 1) {
-        return letter.as_bytes()[0]
-            .is_ascii_uppercase()
-            .then_some(letter.as_bytes()[0] as u16);
-    }
-    if let Some(digit) = key.strip_prefix("Digit").filter(|s| s.len() == 1) {
-        return digit.as_bytes()[0]
-            .is_ascii_digit()
-            .then_some(digit.as_bytes()[0] as u16);
-    }
-    if let Some(number) = key.strip_prefix('F').and_then(|s| s.parse::<u16>().ok()) {
-        if (1..=12).contains(&number) && key == format!("F{number}") {
-            return Some(VK_F1 + number - 1);
-        }
-    }
-    Some(match key {
-        "ArrowLeft" => VK_LEFT,
-        "ArrowRight" => VK_RIGHT,
-        "ArrowUp" => VK_UP,
-        "ArrowDown" => VK_DOWN,
-        "Space" => VK_SPACE,
-        "Enter" => VK_RETURN,
-        "Escape" => VK_ESCAPE,
-        "Tab" => VK_TAB,
-        "Backspace" => VK_BACK,
-        "Delete" => VK_DELETE,
-        "Home" => VK_HOME,
-        "End" => VK_END,
-        "PageUp" => VK_PRIOR,
-        "PageDown" => VK_NEXT,
-        "Insert" => VK_INSERT,
-        "Minus" => VK_OEM_MINUS,
-        "Equal" => VK_OEM_PLUS,
-        "BracketLeft" => VK_OEM_4,
-        "BracketRight" => VK_OEM_6,
-        "Backslash" => VK_OEM_5,
-        "Semicolon" => VK_OEM_1,
-        "Quote" => VK_OEM_7,
-        "Comma" => VK_OEM_COMMA,
-        "Period" => VK_OEM_PERIOD,
-        "Slash" => VK_OEM_2,
-        "Backquote" => VK_OEM_3,
-        _ => return None,
     })
 }
 
@@ -645,22 +603,30 @@ fn custom_scan(key: &str) -> Option<u16> {
     })
 }
 
-fn validate_application(path: &str) -> Result<(), String> {
+fn validate_application_shape(path: &str) -> Result<(), String> {
     let path = std::path::Path::new(path);
     if !path.is_absolute()
-        || !path.is_file()
         || !path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
     {
-        return Err("Choose an existing application with an absolute .exe path.".into());
+        return Err("Choose an application with an absolute .exe path.".into());
+    }
+    Ok(())
+}
+
+fn validate_application(path: &str) -> Result<(), String> {
+    validate_application_shape(path)?;
+    if !std::path::Path::new(path).is_file() {
+        return Err("The selected application no longer exists. Choose it again.".into());
     }
     Ok(())
 }
 
 pub fn validate_action(action: &Action) -> Result<(), String> {
     match action {
-        Action::LaunchApplication { path } => validate_application(path),
+        // Existence is checked when picking and pressing, so a missing app never disables other mappings.
+        Action::LaunchApplication { path } => validate_application_shape(path),
         Action::Minimize | Action::Maximize => Ok(()),
         _ => shortcut(action).map(|_| ()),
     }
@@ -761,18 +727,42 @@ fn shortcut_inputs(keys: &[u16], scan: Option<u16>, up: bool) -> Vec<INPUT> {
     inputs
 }
 
+// ShellExecute honors the app manifest, so apps that require elevation prompt instead of failing with 740.
+fn shell_open(path: &str) -> Result<(), String> {
+    use std::{os::windows::ffi::OsStrExt, path::Path};
+    let wide = |text: &std::ffi::OsStr| -> Vec<u16> { text.encode_wide().chain([0]).collect() };
+    let file = wide(Path::new(path).as_os_str());
+    let directory = Path::new(path)
+        .parent()
+        .map(|parent| wide(parent.as_os_str()));
+    let verb = wide("open".as_ref());
+    let result = unsafe {
+        ShellExecuteW(
+            null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            directory
+                .as_ref()
+                .map_or(std::ptr::null(), |dir| dir.as_ptr()),
+            SW_SHOWNORMAL,
+        )
+    } as usize;
+    if result <= 32 {
+        return Err(format!(
+            "Windows could not launch the application (error {result})."
+        ));
+    }
+    Ok(())
+}
+
 fn perform(action: Action) -> Result<(), String> {
     if let Action::LaunchApplication { path } = action {
         // Filesystem validation and process creation can block; never delay the mouse hook.
         return thread::Builder::new()
             .name("qz-launch".into())
             .spawn(move || {
-                let result = validate_application(&path).and_then(|_| {
-                    std::process::Command::new(&path)
-                        .spawn()
-                        .map(|_| ())
-                        .map_err(|e| format!("Could not launch application: {e}"))
-                });
+                let result = validate_application(&path).and_then(|_| shell_open(&path));
                 if let (Err(error), Some(shared)) = (result, SHARED.get()) {
                     shared
                         .engine
@@ -1220,13 +1210,13 @@ mod tests {
                 modifiers: vec!["control".into(), "shift".into()]
             })
             .unwrap(),
-            vec![VK_CONTROL, VK_SHIFT, b'K' as u16]
+            vec![VK_CONTROL, VK_SHIFT, 0]
         );
         for key in ["Keya", "F13", "F01", "Shell", ""] {
-            assert!(custom_key(key).is_none());
+            assert!(custom_scan(key).is_none());
         }
         for key in ["KeyZ", "Digit0", "F12", "Insert", "Slash"] {
-            assert!(custom_key(key).is_some());
+            assert!(custom_scan(key).is_some());
         }
         assert!(validate_action(&Action::CustomShortcut {
             key: "KeyK".into(),
@@ -1239,6 +1229,8 @@ mod tests {
         })
         .is_err());
         assert!(validate_application("calc.exe").is_err());
+        assert!(validate_application_shape(r"C:\Missing\App.exe").is_ok());
+        assert!(validate_application(r"C:\Missing\App.exe").is_err());
         assert!(validate_application(r"C:\Windows\System32\cmd.exe /c echo bad").is_err());
         assert!(validate_application(std::env::current_exe().unwrap().to_str().unwrap()).is_ok());
     }
@@ -1269,10 +1261,7 @@ mod tests {
         assert!(shortcut(&Action::Minimize).is_err());
         assert!(validate_action(&Action::Minimize).is_ok());
         for letter in b'A'..=b'Z' {
-            assert_eq!(
-                custom_key(&format!("Key{}", letter as char)),
-                Some(letter as u16)
-            );
+            assert!(custom_scan(&format!("Key{}", letter as char)).is_some());
         }
     }
     #[test]
