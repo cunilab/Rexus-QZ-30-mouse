@@ -1,6 +1,6 @@
 # QZ Flow
 
-An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Windows/macOS interface. It remaps OS mouse events and listens to observed side-wheel receiver reports on Windows; it does not use Rexus's DLL or change the mouse firmware.
+An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Windows/macOS/Linux interface. It remaps OS mouse events and listens to observed side-wheel receiver reports on Windows; on Linux it reads the receiver's evdev input device; it does not use Rexus's DLL or change the mouse firmware.
 
 ![QZ Flow interface with the original mouse render](docs/preview.png)
 
@@ -22,9 +22,28 @@ Actions are grouped into Mouse, Editing, Desktop and windows, Browser and tabs, 
 
 Primary left/right click and vertical scrolling are left alone. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS requires horizontal OS scroll events and has no thumb-rest support. Disable is unavailable for Windows raw receiver wheel/thumb inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
 
+## Use on Linux
+
+Linux reads the receiver's `/dev/input/event*` device and re-emits all unmapped events through a `uinput` virtual mouse, so it works on X11 and Wayland. Both need permissions that ordinary users do not have by default:
+
+1. Install the udev rule, then replug the receiver:
+
+   ```sh
+   sudo cp packaging/linux/70-qz-flow.rules /etc/udev/rules.d/
+   sudo udevadm control --reload && sudo udevadm trigger
+   echo uinput | sudo tee /etc/modules-load.d/uinput.conf && sudo modprobe uinput
+   ```
+
+   Sign out and in if `/dev/uinput` is still not writable. QZ Flow shows **Open input permissions** until the receiver's node is readable and `/dev/uinput` is writable; that button only explains these steps because Linux has no permission dialog.
+2. Mappings grab only the QZ30 receiver's pointer device, not every mouse. Keyboard shortcuts and media keys are sent through a virtual keyboard. Unsupported actions (Show desktop, Minimize, Maximize) are rejected when saving; see [action behavior](docs/ACTIONS.md).
+3. Button 4 (thumb rest), shortcut recording and window actions are unavailable. Choose keys manually for custom shortcuts. **Choose application** needs `zenity` or `kdialog`.
+4. The tray icon needs an AppIndicator-capable desktop (GNOME needs the AppIndicator extension). Without a tray, start QZ Flow again to reopen its window. Launch at login writes `~/.config/autostart/dev.qzflow.desktop`.
+
+Linux builds and unit tests run in GitHub Actions; real receiver behavior on Linux is unverified. Linux cannot see physically held keyboard modifiers, so a held Ctrl/Alt/Shift/Super combines with an injected shortcut instead of bypassing it.
+
 ## Build and run
 
-Install Node.js 24, Rust stable, and the native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the build computer. Windows requires the Microsoft C++ build tools and WebView2. macOS requires Xcode Command Line Tools.
+Install Node.js 24, Rust stable, and the native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the build computer. Windows requires the Microsoft C++ build tools and WebView2. macOS requires Xcode Command Line Tools. Linux requires `build-essential pkg-config libssl-dev libxdo-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev` (Debian/Ubuntu package names).
 
 ```sh
 npm ci
@@ -37,7 +56,7 @@ npm run check
 npm run build -- --no-bundle
 ```
 
-The last command produces a native release executable in `src-tauri/target/release`. For a Windows installer run `npm run build -- --bundles nsis`. For a macOS application run `npm run build -- --bundles app` **on a Mac**. Windows Authenticode and Apple signing/notarization are not configured. Updater artifact signing and draft releases are configured; in-app update prompts are a later milestone.
+The last command produces a native release executable in `src-tauri/target/release`. For a Windows installer run `npm run build -- --bundles nsis`. For a macOS application run `npm run build -- --bundles app` **on a Mac**. For Linux packages run `npm run build -- --bundles appimage,deb` on Linux. Windows Authenticode and Apple signing/notarization are not configured. Updater artifact signing and draft releases are configured; in-app update prompts are a later milestone.
 
 ### macOS
 
@@ -58,13 +77,14 @@ The first enumerates compatible receiver interfaces. The second also creates and
 
 ## Settings and implementation
 
-Assignments are stored in Tauri's per-user configuration directory under `dev.qzflow.desktop/mappings.json`. Windows normally uses `%APPDATA%`; macOS uses `~/Library/Application Support`. Saves use a staged file and atomic rename. The version 2 envelope stores assignments and an explicit Pause preference. Legacy and version 1 assignments load unchanged. Before replacing a legacy, corrupt, or unsupported file, an exact sibling `.mappings.json-*.backup` is retained; failed backup or replacement leaves the original file intact.
+Assignments are stored in Tauri's per-user configuration directory under `dev.qzflow.desktop/mappings.json`. Windows normally uses `%APPDATA%`; macOS uses `~/Library/Application Support`; Linux uses `~/.config`. Saves use a staged file and atomic rename. The version 2 envelope stores assignments and an explicit Pause preference. Legacy and version 1 assignments load unchanged. Before replacing a legacy, corrupt, or unsupported file, an exact sibling `.mappings.json-*.backup` is retained; failed backup or replacement leaves the original file intact.
 
 For recovery or downgrade, Quit QZ Flow, copy the current file somewhere safe, then copy the chosen backup to `mappings.json`. Legacy backups work with the older app. A malformed file is reported and defaults remain inactive until replaced through a successful Save.
 
 - `ui/`: plain HTML, CSS, and JavaScript; no frontend framework or external assets.
 - `src-tauri/src/engine.rs`: shared mapping and press/release state.
-- `src-tauri/src/platform/`: Win32 and macOS inventory/hooks.
+- `src-tauri/src/platform/`: Win32, macOS and Linux (evdev/uinput) inventory/hooks.
+- `packaging/linux/`: udev rule granting the receiver and `/dev/uinput` access.
 - `tests/ui.test.cjs`: interface state/race tests using mocked native calls.
 - `analysis/ASSESSMENT.md`: REA findings from the supplied vendor packages.
 - `docs/VALIDATION.md`: actual checks and unresolved hardware work.

@@ -67,11 +67,12 @@ test('updater verification rejects altered payload, key, comment and malformed s
 
 function assets(directory, fixture) {
   for (const platform of platforms) {
-    const updater = assetName(`${platform}-QZ Flow${platform.startsWith('windows') ? '-setup.exe' : '.app.tar.gz'}`);
+    const updater = assetName(`${platform}-QZ Flow${platform.startsWith('windows') ? '-setup.exe' : platform.startsWith('linux') ? '.AppImage' : '.app.tar.gz'}`);
     const data = Buffer.from(`installer ${platform}`);
     const signature = fixture.signature(data);
     const files = [[updater, data], [`${updater}.sig`, Buffer.from(signature)]];
     if (platform.startsWith('darwin')) files.push([`${platform}-QZ.Flow.dmg`, Buffer.from('disk image')]);
+    if (platform.startsWith('linux')) files.push([`${platform}-QZ.Flow.deb`, Buffer.from('package')]);
     for (const [name, content] of files) writeFileSync(join(directory, name), content);
     writeFileSync(join(directory, `${platform}.json`), JSON.stringify({ platform, version: '0.1.0', tag: 'v0.1.0', updater, signature,
       files: files.map(([name, content]) => ({ name, sha256: createHash('sha256').update(content).digest('hex') })),
@@ -79,7 +80,7 @@ function assets(directory, fixture) {
   }
 }
 
-test('release assembly requires all three intact platforms and generates tag-specific feed/checksums', () => {
+test('release assembly requires every intact platform and generates tag-specific feed/checksums', () => {
   const directory = mkdtempSync(join(tmpdir(), 'qz-release-'));
   const fixture = signingFixture();
   try {
@@ -88,6 +89,7 @@ test('release assembly requires all three intact platforms and generates tag-spe
     const feed = JSON.parse(readFileSync(join(directory, 'latest.json'), 'utf8'));
     assert.deepEqual(Object.keys(feed.platforms), platforms);
     assert.match(feed.platforms['darwin-x86_64'].url, /releases\/download\/v0.1.0\/darwin-x86_64-QZ.Flow.app.tar.gz$/);
+    assert.match(feed.platforms['linux-x86_64'].url, /releases\/download\/v0.1.0\/linux-x86_64-QZ.Flow.AppImage$/);
     assert.equal(assetName('QZ Flow_0.1.0.exe'), 'QZ.Flow_0.1.0.exe');
     assert.ok(result.includes('SHA256SUMS.txt'));
     const checksumLines = readFileSync(join(directory, 'SHA256SUMS.txt'), 'utf8').trim().split('\n');
@@ -141,6 +143,32 @@ test('stage normalizes GitHub filenames and rejects tampered CLI artifacts', () 
     const invalid = spawnSync(process.execPath, [script, 'stage'], { cwd: directory, env, encoding: 'utf8' });
     assert.notEqual(invalid.status, 0);
     assert.match(invalid.stderr, /artifact signature/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('stage requires the Linux AppImage updater and its Debian package', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'qz-stage-'));
+  const fixture = signingFixture();
+  try {
+    mkdirSync(join(directory, 'src-tauri'));
+    writeFileSync(join(directory, 'package.json'), JSON.stringify({ version: '0.1.0' }));
+    writeFileSync(join(directory, 'src-tauri/tauri.release.conf.json'), JSON.stringify({ plugins: { updater: { pubkey: fixture.key } } }));
+    const image = join(directory, 'QZ Flow_0.1.0_amd64.AppImage');
+    const deb = join(directory, 'QZ Flow_0.1.0_amd64.deb');
+    const data = Buffer.from('valid appimage');
+    writeFileSync(image, data);
+    writeFileSync(deb, 'package');
+    writeFileSync(`${image}.sig`, fixture.signature(data));
+    const run = paths => spawnSync(process.execPath, [script, 'stage'], { cwd: directory, encoding: 'utf8',
+      env: { ...process.env, RELEASE_TAG: 'v0.1.0', RELEASE_PLATFORM: 'linux-x86_64', ARTIFACT_PATHS: JSON.stringify(paths) } });
+    const missing = run([image, `${image}.sig`]);
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /Missing linux-x86_64 \.deb installer/);
+    const valid = run([image, `${image}.sig`, deb]);
+    assert.equal(valid.status, 0, valid.stderr);
+    const record = JSON.parse(readFileSync(join(directory, 'release-assets/linux-x86_64.json'), 'utf8'));
+    assert.equal(record.updater, 'linux-x86_64-QZ.Flow_0.1.0_amd64.AppImage');
+    assert.deepEqual(record.files.map(file => file.name).sort(), [record.updater, `${record.updater}.sig`, 'linux-x86_64-QZ.Flow_0.1.0_amd64.deb']);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

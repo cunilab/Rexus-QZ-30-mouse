@@ -1,16 +1,29 @@
+// Only the Windows and macOS recorders use the capture machinery below.
+#![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 use crate::engine::Action;
 use std::{
     collections::BTreeMap,
     sync::Mutex,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(any(windows, target_os = "macos"))]
+use tauri::Manager;
 
 static RECORDING: Mutex<()> = Mutex::new(());
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn record(_app: &AppHandle) -> Result<Option<Action>, String> {
+    Err(
+        "Shortcut recording is not supported on Linux yet. Choose the key and modifiers manually."
+            .into(),
+    )
+}
+
 // Invoke on a blocking worker: native event delivery and focus checks need the UI thread free.
+#[cfg(any(windows, target_os = "macos"))]
 pub fn record(app: &AppHandle) -> Result<Option<Action>, String> {
     let _recording = RECORDING
         .try_lock()

@@ -1,0 +1,880 @@
+use crate::{
+    engine::{Action, Input},
+    Device, Shared,
+};
+use evdev::{
+    uinput::VirtualDevice, AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode,
+    RelativeAxisCode,
+};
+use std::{
+    fs,
+    os::{fd::AsRawFd, unix::fs::PermissionsExt, unix::process::CommandExt},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    thread::{self, JoinHandle},
+};
+
+static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
+static KEYBOARD: Mutex<Option<VirtualDevice>> = Mutex::new(None);
+const SYSFS_INPUT: &str = "/sys/class/input";
+const UINPUT: &str = "/dev/uinput";
+// Discovery skips devices with this prefix, so our own virtual devices are never re-processed.
+const VIRTUAL_PREFIX: &str = "QZ Flow virtual";
+const MOUSE_NAME: &str = "QZ Flow virtual mouse";
+const KEYBOARD_NAME: &str = "QZ Flow virtual keyboard";
+const SETUP_HINT: &str = "Install packaging/linux/70-qz-flow.rules as described in the README, replug the receiver, then sign out and in.";
+
+struct Node {
+    path: PathBuf,
+    name: String,
+    pointer: bool,
+}
+
+// sysfs files hold hexadecimal words, most significant first; the last word has the low bits.
+fn parse_hex(text: &str) -> Option<u64> {
+    u64::from_str_radix(text.split_whitespace().last()?, 16).ok()
+}
+
+fn read_hex(path: &Path) -> Option<u64> {
+    parse_hex(&fs::read_to_string(path).ok()?)
+}
+
+fn has_relative_axes(event_types: u64) -> bool {
+    event_types & (1 << EventType::RELATIVE.0) != 0
+}
+
+fn is_receiver(bus: Option<u64>, vendor: Option<u64>, product: Option<u64>, name: &str) -> bool {
+    vendor == Some(super::RECEIVER_VENDOR.into())
+        && product == Some(super::RECEIVER_PRODUCT.into())
+        && bus != Some(BusType::BUS_VIRTUAL.0.into())
+        && !name.starts_with(VIRTUAL_PREFIX)
+}
+
+// sysfs is world-readable, so the receiver is found even before /dev/input access is granted.
+fn receiver_nodes() -> Result<Vec<Node>, String> {
+    let entries = fs::read_dir(SYSFS_INPUT)
+        .map_err(|error| format!("Linux could not list input devices: {error}"))?;
+    let mut nodes = Vec::new();
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let Some(file) = file.to_str().filter(|name| name.starts_with("event")) else {
+            continue;
+        };
+        let device = entry.path().join("device");
+        let id = |name: &str| read_hex(&device.join("id").join(name));
+        let name = fs::read_to_string(device.join("name"))
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if is_receiver(id("bustype"), id("vendor"), id("product"), &name) {
+            nodes.push(Node {
+                path: Path::new("/dev/input").join(file),
+                name,
+                pointer: read_hex(&device.join("capabilities/ev")).is_some_and(has_relative_axes),
+            });
+        }
+    }
+    nodes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(nodes)
+}
+
+pub fn devices() -> Result<Vec<Device>, String> {
+    let nodes = receiver_nodes()?;
+    Ok(nodes
+        .iter()
+        .find(|node| node.pointer)
+        .or(nodes.first())
+        .map(|node| Device {
+            vendor_id: super::RECEIVER_VENDOR,
+            product_id: super::RECEIVER_PRODUCT,
+            name: if node.name.is_empty() {
+                "QZ30-compatible USB receiver".into()
+            } else {
+                node.name.clone()
+            },
+            transport: "USB / 2.4 GHz receiver".into(),
+        })
+        .into_iter()
+        .collect())
+}
+
+fn access_granted(nodes: &[Node], readable: impl Fn(&Path) -> bool, uinput_writable: bool) -> bool {
+    uinput_writable
+        && nodes
+            .iter()
+            .filter(|node| node.pointer)
+            .all(|node| readable(&node.path))
+}
+
+pub fn permission() -> &'static str {
+    let uinput = fs::OpenOptions::new().write(true).open(UINPUT).is_ok();
+    let nodes = receiver_nodes().unwrap_or_default();
+    if access_granted(&nodes, |path| fs::File::open(path).is_ok(), uinput) {
+        "granted"
+    } else {
+        "required"
+    }
+}
+
+pub fn ensure_no_vendor_utility() -> Result<(), String> {
+    Ok(()) // The original utility is Windows/macOS only.
+}
+
+pub fn open_input_settings() -> Result<(), String> {
+    Err(format!(
+        "Linux has no input permission dialog. {SETUP_HINT}"
+    ))
+}
+
+pub struct Hook {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl Drop for Hook {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+struct Pair {
+    device: evdev::Device,
+    mouse: VirtualDevice,
+}
+
+fn uinput_error(error: std::io::Error) -> String {
+    format!("Could not create a virtual input device ({error}). {SETUP_HINT}")
+}
+
+// The virtual mouse mirrors the physical one so every unmapped event can be forwarded unchanged.
+fn open_pair(path: &Path) -> Result<Pair, String> {
+    let device = evdev::Device::open(path)
+        .map_err(|error| format!("Could not open {} ({error}). {SETUP_HINT}", path.display()))?;
+    let id = device.input_id();
+    let mut builder = VirtualDevice::builder()
+        .map_err(uinput_error)?
+        .name(MOUSE_NAME)
+        .input_id(InputId::new(
+            BusType::BUS_VIRTUAL,
+            id.vendor(),
+            id.product(),
+            id.version(),
+        ))
+        .with_properties(device.properties())
+        .map_err(uinput_error)?;
+    if let Some(keys) = device.supported_keys() {
+        builder = builder.with_keys(keys).map_err(uinput_error)?;
+    }
+    if let Some(axes) = device.supported_relative_axes() {
+        builder = builder.with_relative_axes(axes).map_err(uinput_error)?;
+    }
+    if let Some(misc) = device.misc_properties() {
+        builder = builder.with_msc(misc).map_err(uinput_error)?;
+    }
+    let mouse = builder.build().map_err(uinput_error)?;
+    Ok(Pair { device, mouse })
+}
+
+fn virtual_keyboard() -> Result<VirtualDevice, String> {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    for code in 1..=248 {
+        keys.insert(KeyCode::new(code));
+    }
+    VirtualDevice::builder()
+        .map_err(uinput_error)?
+        .name(KEYBOARD_NAME)
+        .input_id(InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1))
+        .with_keys(&keys)
+        .map_err(uinput_error)?
+        .build()
+        .map_err(uinput_error)
+}
+
+pub fn start(shared: Arc<Shared>) -> Result<Hook, String> {
+    if permission() != "granted" {
+        return Err(format!(
+            "QZ Flow cannot open the receiver or /dev/uinput. {SETUP_HINT}"
+        ));
+    }
+    let _ = SHARED.set(shared.clone());
+    let nodes: Vec<_> = receiver_nodes()?
+        .into_iter()
+        .filter(|node| node.pointer)
+        .collect();
+    if nodes.is_empty() {
+        return Err("The receiver's mouse input was not found. Replug the receiver.".into());
+    }
+    let mut pairs = nodes
+        .iter()
+        .map(|node| open_pair(&node.path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let keyboard = virtual_keyboard()?;
+    // Grab last: closing the descriptors on an error releases any grab already taken.
+    for pair in &mut pairs {
+        pair.device
+            .set_nonblocking(true)
+            .map_err(|e| e.to_string())?;
+        pair.device
+            .grab()
+            .map_err(|error| format!("Could not take exclusive control of the receiver ({error}). Another program may be using it."))?;
+    }
+    *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(keyboard);
+    shared.hook_running.store(true, Ordering::Release);
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let join = thread::Builder::new()
+        .name("qz-evdev".into())
+        .spawn(move || {
+            run(&shared, &thread_stop, &mut pairs);
+            for pair in &mut pairs {
+                let _ = pair.device.ungrab();
+            }
+            shared.hook_running.store(false, Ordering::Release);
+            shared
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .enabled = false;
+        })
+        .map_err(|error| {
+            *KEYBOARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            format!("Could not start the input listener: {error}")
+        })?;
+    Ok(Hook {
+        stop,
+        join: Some(join),
+    })
+}
+
+// Returns when asked to stop or when a device disappears; polling keeps shutdown prompt.
+fn run(shared: &Shared, stop: &AtomicBool, pairs: &mut [Pair]) {
+    let mut fds: Vec<_> = pairs
+        .iter()
+        .map(|pair| libc::pollfd {
+            fd: pair.device.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+    let mut batch = Vec::new();
+    while !stop.load(Ordering::Acquire) {
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 100) };
+        if ready < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return;
+        }
+        for (pair, fd) in pairs.iter_mut().zip(&fds) {
+            if fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                return;
+            }
+            if fd.revents & libc::POLLIN == 0 {
+                continue;
+            }
+            let Pair { device, mouse } = pair;
+            let events = match device.fetch_events() {
+                Ok(events) => events,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => return,
+            };
+            for event in events {
+                if event.event_type() != EventType::SYNCHRONIZATION {
+                    batch.push(event);
+                    continue;
+                }
+                let output =
+                    filter_batch(&batch, |input, down| shared.process(input, down, perform));
+                batch.clear();
+                if !output.is_empty() && mouse.emit(&output).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn button_input(event: &InputEvent) -> Option<(Input, bool)> {
+    if event.event_type() != EventType::KEY || !(0..=1).contains(&event.value()) {
+        return None;
+    }
+    let input = match KeyCode::new(event.code()) {
+        KeyCode::BTN_SIDE => Input::Back,
+        KeyCode::BTN_EXTRA => Input::Forward,
+        KeyCode::BTN_MIDDLE => Input::Middle,
+        _ => return None,
+    };
+    Some((input, event.value() == 1))
+}
+
+fn is_horizontal_wheel(event: &InputEvent) -> bool {
+    event.event_type() == EventType::RELATIVE
+        && [
+            RelativeAxisCode::REL_HWHEEL.0,
+            RelativeAxisCode::REL_HWHEEL_HI_RES.0,
+        ]
+        .contains(&event.code())
+}
+
+// A notch reports legacy and hi-res events together, so decide once per report.
+fn wheel_input(batch: &[InputEvent]) -> Option<Input> {
+    let sum = |code: u16| {
+        batch
+            .iter()
+            .filter(|event| event.event_type() == EventType::RELATIVE && event.code() == code)
+            .map(InputEvent::value)
+            .sum::<i32>()
+    };
+    let hi_res = sum(RelativeAxisCode::REL_HWHEEL_HI_RES.0);
+    let delta = if hi_res != 0 {
+        hi_res
+    } else {
+        sum(RelativeAxisCode::REL_HWHEEL.0)
+    };
+    match delta.signum() {
+        1 => Some(Input::WheelRight),
+        -1 => Some(Input::WheelLeft),
+        _ => None,
+    }
+}
+
+// Everything is forwarded unchanged except events consumed by a mapped input.
+fn filter_batch(
+    batch: &[InputEvent],
+    mut process: impl FnMut(Input, bool) -> bool,
+) -> Vec<InputEvent> {
+    let drop_wheel = wheel_input(batch).is_some_and(|input| process(input, true));
+    batch
+        .iter()
+        .filter(|event| {
+            if is_horizontal_wheel(event) {
+                return !drop_wheel;
+            }
+            button_input(event).is_none_or(|(input, down)| !process(input, down))
+        })
+        .copied()
+        .collect()
+}
+
+fn shortcut(action: &Action) -> Result<Vec<u16>, String> {
+    use KeyCode as K;
+    let keys = match action {
+        Action::Default | Action::Disable => vec![],
+        Action::Copy => vec![K::KEY_LEFTCTRL, K::KEY_C],
+        Action::Cut => vec![K::KEY_LEFTCTRL, K::KEY_X],
+        Action::Paste => vec![K::KEY_LEFTCTRL, K::KEY_V],
+        Action::Undo => vec![K::KEY_LEFTCTRL, K::KEY_Z],
+        Action::Redo => vec![K::KEY_LEFTCTRL, K::KEY_LEFTSHIFT, K::KEY_Z],
+        Action::SelectAll => vec![K::KEY_LEFTCTRL, K::KEY_A],
+        Action::BrowserBack => vec![K::KEY_LEFTALT, K::KEY_LEFT],
+        Action::BrowserForward => vec![K::KEY_LEFTALT, K::KEY_RIGHT],
+        Action::TaskView => vec![K::KEY_LEFTMETA], // GNOME Activities overview.
+        Action::PreviousDesktop => vec![K::KEY_LEFTCTRL, K::KEY_LEFTALT, K::KEY_LEFT],
+        Action::NextDesktop => vec![K::KEY_LEFTCTRL, K::KEY_LEFTALT, K::KEY_RIGHT],
+        Action::SwitchApps => vec![K::KEY_LEFTALT, K::KEY_TAB],
+        Action::PreviousTab => vec![K::KEY_LEFTCTRL, K::KEY_LEFTSHIFT, K::KEY_TAB],
+        Action::NextTab => vec![K::KEY_LEFTCTRL, K::KEY_TAB],
+        Action::NewTab => vec![K::KEY_LEFTCTRL, K::KEY_T],
+        Action::CloseTab => vec![K::KEY_LEFTCTRL, K::KEY_W],
+        Action::ReopenTab => vec![K::KEY_LEFTCTRL, K::KEY_LEFTSHIFT, K::KEY_T],
+        Action::Refresh => vec![K::KEY_LEFTCTRL, K::KEY_R],
+        Action::ZoomIn => vec![K::KEY_LEFTCTRL, K::KEY_EQUAL],
+        Action::ZoomOut => vec![K::KEY_LEFTCTRL, K::KEY_MINUS],
+        Action::ZoomReset => vec![K::KEY_LEFTCTRL, K::KEY_0],
+        Action::Screenshot => vec![K::KEY_SYSRQ], // The Print Screen key.
+        Action::VolumeUp => vec![K::KEY_VOLUMEUP],
+        Action::VolumeDown => vec![K::KEY_VOLUMEDOWN],
+        Action::Mute => vec![K::KEY_MUTE],
+        Action::PlayPause => vec![K::KEY_PLAYPAUSE],
+        Action::PreviousTrack => vec![K::KEY_PREVIOUSSONG],
+        Action::NextTrack => vec![K::KEY_NEXTSONG],
+        Action::CustomShortcut { key, modifiers } => {
+            let mut keys = Vec::new();
+            for modifier in modifiers {
+                let code = match modifier.as_str() {
+                    "control" => K::KEY_LEFTCTRL,
+                    "alt" => K::KEY_LEFTALT,
+                    "shift" => K::KEY_LEFTSHIFT,
+                    "meta" => K::KEY_LEFTMETA,
+                    _ => return Err(format!("Unknown shortcut modifier: {modifier}")),
+                };
+                if keys.contains(&code) {
+                    return Err("Shortcut modifiers must be unique.".into());
+                }
+                keys.push(code);
+            }
+            keys.push(
+                custom_key(key)
+                    .ok_or_else(|| format!("Unsupported shortcut key on Linux: {key}"))?,
+            );
+            keys
+        }
+        Action::Desktop | Action::Minimize | Action::Maximize => {
+            return Err("This window action has no shortcut shared by GNOME and KDE, so it is not supported on Linux. Choose another action or a custom shortcut.".into());
+        }
+        Action::LaunchApplication { .. } => {
+            return Err("This action does not use a keyboard shortcut.".into());
+        }
+    };
+    Ok(keys.into_iter().map(|key| key.0).collect())
+}
+
+// Key names are US physical positions, as in the other platforms.
+fn custom_key(key: &str) -> Option<KeyCode> {
+    use KeyCode as K;
+    const LETTERS: [KeyCode; 26] = [
+        K::KEY_A,
+        K::KEY_B,
+        K::KEY_C,
+        K::KEY_D,
+        K::KEY_E,
+        K::KEY_F,
+        K::KEY_G,
+        K::KEY_H,
+        K::KEY_I,
+        K::KEY_J,
+        K::KEY_K,
+        K::KEY_L,
+        K::KEY_M,
+        K::KEY_N,
+        K::KEY_O,
+        K::KEY_P,
+        K::KEY_Q,
+        K::KEY_R,
+        K::KEY_S,
+        K::KEY_T,
+        K::KEY_U,
+        K::KEY_V,
+        K::KEY_W,
+        K::KEY_X,
+        K::KEY_Y,
+        K::KEY_Z,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        K::KEY_0,
+        K::KEY_1,
+        K::KEY_2,
+        K::KEY_3,
+        K::KEY_4,
+        K::KEY_5,
+        K::KEY_6,
+        K::KEY_7,
+        K::KEY_8,
+        K::KEY_9,
+    ];
+    const FUNCTION: [KeyCode; 12] = [
+        K::KEY_F1,
+        K::KEY_F2,
+        K::KEY_F3,
+        K::KEY_F4,
+        K::KEY_F5,
+        K::KEY_F6,
+        K::KEY_F7,
+        K::KEY_F8,
+        K::KEY_F9,
+        K::KEY_F10,
+        K::KEY_F11,
+        K::KEY_F12,
+    ];
+    if let Some(letter) = key.strip_prefix("Key").filter(|s| s.len() == 1) {
+        let letter = letter.as_bytes()[0];
+        return letter
+            .is_ascii_uppercase()
+            .then(|| LETTERS[(letter - b'A') as usize]);
+    }
+    if let Some(digit) = key.strip_prefix("Digit").filter(|s| s.len() == 1) {
+        let digit = digit.as_bytes()[0];
+        return digit
+            .is_ascii_digit()
+            .then(|| DIGITS[(digit - b'0') as usize]);
+    }
+    if let Some(number) = key.strip_prefix('F').and_then(|s| s.parse::<usize>().ok()) {
+        if (1..=12).contains(&number) && key == format!("F{number}") {
+            return Some(FUNCTION[number - 1]);
+        }
+    }
+    Some(match key {
+        "ArrowLeft" => K::KEY_LEFT,
+        "ArrowRight" => K::KEY_RIGHT,
+        "ArrowUp" => K::KEY_UP,
+        "ArrowDown" => K::KEY_DOWN,
+        "Space" => K::KEY_SPACE,
+        "Enter" => K::KEY_ENTER,
+        "Escape" => K::KEY_ESC,
+        "Tab" => K::KEY_TAB,
+        "Backspace" => K::KEY_BACKSPACE,
+        "Delete" => K::KEY_DELETE,
+        "Home" => K::KEY_HOME,
+        "End" => K::KEY_END,
+        "PageUp" => K::KEY_PAGEUP,
+        "PageDown" => K::KEY_PAGEDOWN,
+        "Insert" => K::KEY_INSERT,
+        "Minus" => K::KEY_MINUS,
+        "Equal" => K::KEY_EQUAL,
+        "BracketLeft" => K::KEY_LEFTBRACE,
+        "BracketRight" => K::KEY_RIGHTBRACE,
+        "Backslash" => K::KEY_BACKSLASH,
+        "Semicolon" => K::KEY_SEMICOLON,
+        "Quote" => K::KEY_APOSTROPHE,
+        "Comma" => K::KEY_COMMA,
+        "Period" => K::KEY_DOT,
+        "Slash" => K::KEY_SLASH,
+        "Backquote" => K::KEY_GRAVE,
+        _ => return None,
+    })
+}
+
+fn validate_application_shape(path: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err("Choose an application with an absolute path to an executable file.".into());
+    }
+    Ok(())
+}
+
+fn validate_application(path: &str) -> Result<(), String> {
+    validate_application_shape(path)?;
+    let executable = fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    if !executable {
+        return Err(
+            "The selected application no longer exists or is not executable. Choose it again."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+pub fn validate_action(action: &Action) -> Result<(), String> {
+    match action {
+        // Existence is checked when picking and pressing, so a missing app never disables other mappings.
+        Action::LaunchApplication { path } => validate_application_shape(path),
+        _ => shortcut(action).map(|_| ()),
+    }
+}
+
+fn picker_result(code: Option<i32>, stdout: &[u8]) -> Result<Option<String>, String> {
+    match code {
+        Some(0) => {
+            let text = std::str::from_utf8(stdout)
+                .map_err(|_| "Application picker returned invalid text.")?;
+            let path = text.strip_suffix('\n').unwrap_or(text);
+            if path.is_empty() {
+                return Ok(None);
+            }
+            validate_application(path)?;
+            Ok(Some(path.into()))
+        }
+        Some(1) => Ok(None), // Both pickers exit with 1 when cancelled.
+        _ => Err("Application picker failed.".into()),
+    }
+}
+
+pub fn pick_application() -> Result<Option<String>, String> {
+    // Fixed arguments; the selected path comes back on stdout as data and is never run through a shell.
+    let pickers: [(&str, &[&str]); 2] = [
+        (
+            "zenity",
+            &["--file-selection", "--title=Choose an application"],
+        ),
+        (
+            "kdialog",
+            &[
+                "--getopenfilename",
+                "/usr/bin",
+                "--title",
+                "Choose an application",
+            ],
+        ),
+    ];
+    for (program, args) in pickers {
+        match Command::new(program).args(args).output() {
+            Ok(output) => return picker_result(output.status.code(), &output.stdout),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not open application picker: {error}")),
+        }
+    }
+    Err("Install zenity or kdialog to choose an application, or run QZ Flow from a desktop session that provides one.".into())
+}
+
+fn launch(path: String) -> Result<(), String> {
+    // Filesystem checks and process creation can block; keep them off the input thread.
+    thread::Builder::new()
+        .name("qz-launch".into())
+        .spawn(move || {
+            let result = validate_application(&path).and_then(|_| {
+                Command::new(&path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .process_group(0)
+                    .spawn()
+                    .map_err(|e| format!("Could not launch application: {e}"))
+            });
+            match (result, SHARED.get()) {
+                // Waiting reaps the child so it never lingers as a zombie.
+                (Ok(mut child), _) => {
+                    let _ = child.wait();
+                }
+                (Err(error), Some(shared)) => {
+                    shared
+                        .engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .error = Some(error);
+                }
+                _ => {}
+            }
+        })
+        .map(|_| ())
+        .map_err(|e| format!("Could not schedule application launch: {e}"))
+}
+
+fn press(keys: &[u16]) -> Result<(), String> {
+    let mut guard = KEYBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let keyboard = guard
+        .as_mut()
+        .ok_or("The virtual keyboard is unavailable. QZ Flow will retry automatically.")?;
+    let events = |keys: &mut dyn Iterator<Item = &u16>, value| {
+        keys.map(|key| InputEvent::new(EventType::KEY.0, *key, value))
+            .collect::<Vec<_>>()
+    };
+    let pressed = keyboard.emit(&events(&mut keys.iter(), 1));
+    // Always attempt the releases so a failed press cannot leave a key stuck down.
+    let released = keyboard.emit(&events(&mut keys.iter().rev(), 0));
+    pressed
+        .and(released)
+        .map_err(|error| format!("Linux could not inject the shortcut: {error}"))
+}
+
+fn perform(action: Action) -> Result<(), String> {
+    if let Action::LaunchApplication { path } = action {
+        return launch(path);
+    }
+    validate_action(&action)?;
+    match action {
+        Action::Disable => Ok(()),
+        Action::Default => Err("Default actions must pass through unchanged.".into()),
+        _ => press(&shortcut(&action)?),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode, value: i32) -> InputEvent {
+        InputEvent::new(EventType::KEY.0, code.0, value)
+    }
+    fn rel(code: RelativeAxisCode, value: i32) -> InputEvent {
+        InputEvent::new(EventType::RELATIVE.0, code.0, value)
+    }
+    fn codes(events: &[InputEvent]) -> Vec<(u16, u16)> {
+        events
+            .iter()
+            .map(|event| (event.event_type().0, event.code()))
+            .collect()
+    }
+
+    #[test]
+    fn sysfs_words_and_receiver_identity_are_parsed_strictly() {
+        assert_eq!(parse_hex("276d\n"), Some(0x276d));
+        assert_eq!(parse_hex("0 17\n"), Some(0x17));
+        assert_eq!(parse_hex(""), None);
+        assert_eq!(parse_hex("zz"), None);
+        assert!(has_relative_axes(0x17));
+        assert!(!has_relative_axes(0x13));
+        let (v, p) = (Some(0x276d), Some(0x1902));
+        assert!(is_receiver(Some(3), v, p, "Rexus Mouse"));
+        assert!(!is_receiver(Some(3), v, Some(0x1903), "Rexus Mouse"));
+        assert!(!is_receiver(Some(3), Some(0x276e), p, "Rexus Mouse"));
+        assert!(!is_receiver(Some(3), None, None, "Rexus Mouse"));
+        // Our own virtual mouse mirrors the receiver's IDs but must never be rediscovered.
+        assert!(!is_receiver(Some(6), v, p, "Rexus Mouse"));
+        assert!(!is_receiver(Some(3), v, p, MOUSE_NAME));
+    }
+
+    #[test]
+    fn permission_needs_readable_pointer_nodes_and_writable_uinput() {
+        let node = |name: &str, pointer| Node {
+            path: name.into(),
+            name: String::new(),
+            pointer,
+        };
+        let nodes = [
+            node("/dev/input/event1", true),
+            node("/dev/input/event2", false),
+        ];
+        let only_second_unreadable = |path: &Path| path != Path::new("/dev/input/event2");
+        assert!(access_granted(&nodes, only_second_unreadable, true));
+        assert!(!access_granted(&nodes, |_| false, true));
+        assert!(!access_granted(&nodes, |_| true, false));
+        assert!(access_granted(&[], |_| false, true));
+    }
+
+    #[test]
+    fn side_buttons_and_wheel_map_to_inputs_and_other_events_pass_through() {
+        assert_eq!(
+            button_input(&key(KeyCode::BTN_SIDE, 1)),
+            Some((Input::Back, true))
+        );
+        assert_eq!(
+            button_input(&key(KeyCode::BTN_EXTRA, 0)),
+            Some((Input::Forward, false))
+        );
+        assert_eq!(
+            button_input(&key(KeyCode::BTN_MIDDLE, 1)),
+            Some((Input::Middle, true))
+        );
+        assert_eq!(button_input(&key(KeyCode::BTN_LEFT, 1)), None);
+        assert_eq!(button_input(&key(KeyCode::BTN_SIDE, 2)), None);
+        let both = [
+            rel(RelativeAxisCode::REL_HWHEEL_HI_RES, -120),
+            rel(RelativeAxisCode::REL_HWHEEL, -1),
+        ];
+        assert_eq!(wheel_input(&both), Some(Input::WheelLeft));
+        assert_eq!(
+            wheel_input(&[rel(RelativeAxisCode::REL_HWHEEL, 1)]),
+            Some(Input::WheelRight)
+        );
+        assert_eq!(wheel_input(&[rel(RelativeAxisCode::REL_WHEEL, 1)]), None);
+    }
+
+    #[test]
+    fn consumed_inputs_are_dropped_and_everything_else_is_forwarded() {
+        let batch = [
+            rel(RelativeAxisCode::REL_X, 5),
+            key(KeyCode::BTN_SIDE, 1),
+            key(KeyCode::BTN_LEFT, 1),
+        ];
+        let mut seen = Vec::new();
+        let output = filter_batch(&batch, |input, down| {
+            seen.push((input, down));
+            input == Input::Back
+        });
+        assert_eq!(seen, [(Input::Back, true)]);
+        assert_eq!(
+            codes(&output),
+            [
+                (EventType::RELATIVE.0, RelativeAxisCode::REL_X.0),
+                (EventType::KEY.0, KeyCode::BTN_LEFT.0)
+            ]
+        );
+        assert_eq!(filter_batch(&batch, |_, _| false).len(), 3);
+    }
+
+    #[test]
+    fn consumed_wheel_drops_legacy_and_hi_res_events_but_keeps_vertical_scroll() {
+        let batch = [
+            rel(RelativeAxisCode::REL_HWHEEL_HI_RES, 120),
+            rel(RelativeAxisCode::REL_HWHEEL, 1),
+            rel(RelativeAxisCode::REL_WHEEL, 1),
+        ];
+        let mut calls = 0;
+        let output = filter_batch(&batch, |input, _| {
+            calls += 1;
+            input == Input::WheelRight
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(
+            codes(&output),
+            [(EventType::RELATIVE.0, RelativeAxisCode::REL_WHEEL.0)]
+        );
+        assert_eq!(filter_batch(&batch, |_, _| false).len(), 3);
+    }
+
+    #[test]
+    fn actions_map_to_distinct_linux_shortcuts() {
+        let codes = |action: &Action| shortcut(action).unwrap();
+        assert_eq!(
+            codes(&Action::Copy),
+            [KeyCode::KEY_LEFTCTRL.0, KeyCode::KEY_C.0]
+        );
+        assert_eq!(
+            codes(&Action::Redo),
+            [
+                KeyCode::KEY_LEFTCTRL.0,
+                KeyCode::KEY_LEFTSHIFT.0,
+                KeyCode::KEY_Z.0
+            ]
+        );
+        assert_eq!(codes(&Action::TaskView), [KeyCode::KEY_LEFTMETA.0]);
+        assert_eq!(codes(&Action::Mute), [KeyCode::KEY_MUTE.0]);
+        assert_eq!(codes(&Action::PlayPause), [KeyCode::KEY_PLAYPAUSE.0]);
+        assert_eq!(
+            codes(&Action::NextDesktop),
+            [
+                KeyCode::KEY_LEFTCTRL.0,
+                KeyCode::KEY_LEFTALT.0,
+                KeyCode::KEY_RIGHT.0
+            ]
+        );
+        assert!(codes(&Action::Default).is_empty());
+        assert!(codes(&Action::Disable).is_empty());
+        assert!(validate_action(&Action::Disable).is_ok());
+        for action in [Action::Desktop, Action::Minimize, Action::Maximize] {
+            assert!(validate_action(&action).is_err());
+        }
+    }
+
+    #[test]
+    fn custom_shortcuts_validate_keys_and_modifiers() {
+        let custom = |key: &str, modifiers: &[&str]| Action::CustomShortcut {
+            key: key.into(),
+            modifiers: modifiers.iter().map(|m| m.to_string()).collect(),
+        };
+        assert_eq!(
+            shortcut(&custom("KeyK", &["control", "shift"])).unwrap(),
+            [
+                KeyCode::KEY_LEFTCTRL.0,
+                KeyCode::KEY_LEFTSHIFT.0,
+                KeyCode::KEY_K.0
+            ]
+        );
+        for key in ["Keya", "F13", "F01", "Shell", "NumpadEnter", ""] {
+            assert!(custom_key(key).is_none());
+        }
+        for key in ["KeyZ", "Digit0", "F12", "Insert", "Slash", "ArrowLeft"] {
+            assert!(custom_key(key).is_some());
+        }
+        for letter in b'A'..=b'Z' {
+            assert!(custom_key(&format!("Key{}", letter as char)).is_some());
+        }
+        assert!(validate_action(&custom("KeyK", &["meta", "meta"])).is_err());
+        assert!(validate_action(&custom("KeyK", &["shell"])).is_err());
+    }
+
+    #[test]
+    fn applications_are_validated_by_shape_and_by_existence_separately() {
+        assert!(validate_application_shape("firefox").is_err());
+        assert!(validate_application_shape("/").is_err());
+        assert!(validate_application_shape("/opt/missing/app").is_ok());
+        assert!(validate_application("/opt/missing/app").is_err());
+        assert!(validate_application("/etc/passwd").is_err());
+        let current = std::env::current_exe().unwrap();
+        assert!(validate_application(current.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn picker_output_is_data_and_cancellation_is_not_an_error() {
+        let current = std::env::current_exe().unwrap();
+        let chosen = format!("{}\n", current.display());
+        assert_eq!(
+            picker_result(Some(0), chosen.as_bytes()).unwrap(),
+            Some(current.display().to_string())
+        );
+        assert_eq!(picker_result(Some(1), b"").unwrap(), None);
+        assert_eq!(picker_result(Some(0), b"\n").unwrap(), None);
+        assert!(picker_result(Some(0), b"relative/app\n").is_err());
+        assert!(picker_result(Some(2), b"").is_err());
+        assert!(picker_result(None, b"").is_err());
+    }
+}

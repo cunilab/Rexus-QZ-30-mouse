@@ -332,7 +332,7 @@ mod tests {
         assert!(status.error.unwrap().contains("saved"));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     #[test]
     fn unsupported_saved_thumb_mapping_reports_reason_before_native_calls() {
         let state = state();

@@ -6,7 +6,7 @@ Releases come from tested commits on `main`, using immutable tags such as `v0.2.
 
 1. Create a short-lived release-preparation branch from current `main`.
 2. Run `npm run version:set -- 0.2.0` and add release notes under `## [0.2.0]` in `CHANGELOG.md`. Use the actual intended version.
-3. Run the checks in [CONTRIBUTING.md](../CONTRIBUTING.md), review the diff, and open a pull request. Squash-merge after the Windows and Mac checks pass.
+3. Run the checks in [CONTRIBUTING.md](../CONTRIBUTING.md), review the diff, and open a pull request. Squash-merge after the Windows, Mac and Linux checks pass.
 4. Fetch `main` and tags, choose the tested commit, and run `npm run version:check -- --tag v0.2.0` from that checkout. Tag that exact commit and push the tag. Never move or reuse a release tag.
 
 Version tooling reads `package.json`, both root version fields in `package-lock.json`, the `qz-flow` package in `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json`. `check` fails on missing, malformed, or inconsistent versions, or a tag that does not exactly equal `v` plus the application version. `set` accepts an explicit strictly increasing semantic version, including prereleases, but excludes build metadata. It preserves dependency versions, writes each file through a temporary file and rename, and attempts to restore originals if a write fails. Filesystem failure during rollback is reported and requires manual repair; interruption or power loss is not a transaction across files. It never commits, tags, pushes, installs dependencies, or publishes.
@@ -25,9 +25,9 @@ The updater secret is configured on GitHub. Every hosted packaging run must pass
 
 ## Build, inspect, and publish
 
-`.github/workflows/release.yml` runs for pushed `v*` tags and accepts a manual `tag` input for an existing version tag. It validates tag/application agreement and that the commit belongs to `main`, then runs reusable checks against that exact commit. The pinned official Tauri action builds a Windows x64 NSIS installer and separate macOS Intel (`x86_64`) and Apple Silicon (`aarch64`) app/DMG packages, plus signed updater artifacts, using `src-tauri/tauri.release.conf.json`.
+`.github/workflows/release.yml` runs for pushed `v*` tags and accepts a manual `tag` input for an existing version tag. It validates tag/application agreement and that the commit belongs to `main`, then runs reusable checks against that exact commit. The pinned official Tauri action builds a Windows x64 NSIS installer and separate macOS Intel (`x86_64`) and Apple Silicon (`aarch64`) app/DMG packages, a Linux x64 AppImage and `.deb` (built on Ubuntu 22.04 for glibc compatibility), plus signed updater artifacts, using `src-tauri/tauri.release.conf.json`.
 
-Packaging output is staged and validated across all three targets before checksums and `latest.json` are assembled and a draft is created. An existing GitHub Release is rejected rather than having its assets overwritten. Use the workflow's configured signing prerequisites; never bypass a failed signing/build gate to publish partial output. Local configuration alone is not proof that GitHub produced or signed working packages.
+Packaging output is staged and validated across every target before checksums and `latest.json` are assembled and a draft is created. An existing GitHub Release is rejected rather than having its assets overwritten. Use the workflow's configured signing prerequisites; never bypass a failed signing/build gate to publish partial output. Local configuration alone is not proof that GitHub produced or signed working packages.
 
 Foundation evidence: [PR #1 and its required Windows/Mac checks](https://github.com/cunilab/Rexus-QZ-30-mouse/pull/1), followed by the [v0.1.1-beta.1 release run](https://github.com/cunilab/Rexus-QZ-30-mouse/actions/runs/39235833219). The beta tag points at the tested foundation merge; it is not a stable publication or proof of an installed update.
 

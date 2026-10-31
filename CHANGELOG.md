@@ -4,6 +4,21 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+### Added
+
+- Linux support (x86_64): the receiver's evdev pointer device is grabbed and re-emitted through a `uinput` virtual mouse, so Back, Forward, Middle and the side wheel can be remapped or disabled on X11 and Wayland. Shortcuts and media keys use a virtual keyboard. A udev rule (`packaging/linux/70-qz-flow.rules`) grants access; see the README.
+- Linux AppImage and `.deb` release builds with signed updater artifacts, and a Linux job in the desktop checks.
+- Linux limits: no button 4, no shortcut recording, and Show desktop, Minimize and Maximize are rejected because GNOME and KDE share no shortcut for them. Linux hardware behavior is unverified.
+
+### Fixed
+
+- A launch target that is missing, moved or updated no longer disables every mapping. Saving and startup check only that the path is absolute and has the right type; existence is checked when choosing the application and when the button is pressed.
+- On Windows, applications start through `ShellExecuteW`, so apps whose manifest requires elevation show the UAC prompt instead of failing with error 740.
+
+### Changed
+
+- Removed the unused virtual-key table for Windows custom shortcuts; they were already sent by physical scan code.
+
 ## [0.1.1-beta.6]
 
 ### Fixed

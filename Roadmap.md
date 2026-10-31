@@ -4,7 +4,7 @@ Approved scope: 19 October 2026, including update prompts, trunk-based developme
 
 ## Goal
 
-Make QZ Flow a convenient daily mouse utility for Rexus QZ30 Black on Windows and macOS: run quietly, apply assignments when saved, and provide useful productivity actions with app-specific profiles.
+Make QZ Flow a convenient daily mouse utility for Rexus QZ30 Black on Windows, macOS and Linux: run quietly, apply assignments when saved, and provide useful productivity actions with app-specific profiles.
 
 ## Approved behavior
 
