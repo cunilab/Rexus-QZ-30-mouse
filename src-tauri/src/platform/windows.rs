@@ -114,7 +114,7 @@ pub fn devices() -> Result<Vec<Device>, String> {
         if found == u32::MAX {
             return Err("Mouse inventory changed while scanning. Try again.".into());
         }
-        let mut devices = Vec::new();
+        let mut devices: Vec<Device> = Vec::new();
         for item in list.into_iter().take(found as usize) {
             let mut length = 0;
             if GetRawInputDeviceInfoW(item.hDevice, RIDI_DEVICENAME, null_mut(), &mut length)
