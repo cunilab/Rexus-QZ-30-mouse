@@ -4,7 +4,7 @@ Use `main` as the integration trunk. Create short-lived `feat/`, `fix/`, or `cho
 
 ## Local checks
 
-Use Node.js 24, the stable Rust toolchain with rustfmt/Clippy, and the platform prerequisites for Tauri 2. Windows and macOS builds must be checked on their respective operating systems.
+Use Node.js 24, the stable Rust toolchain with rustfmt/Clippy, and the platform prerequisites for Tauri 2. Windows, macOS and Linux builds must be checked on their respective operating systems (Linux also needs the Tauri system packages listed in the README).
 
 ```sh
 npm ci
@@ -15,7 +15,7 @@ npm run check
 npm run build -- --no-bundle
 ```
 
-`npm test` includes the UI tests, release/version tooling tests, and Rust tests. Keep platform behavior accurately labelled: a Windows build does not verify Mac mouse input or accessibility permissions.
+`npm test` includes the UI tests, release/version tooling tests, and Rust tests. Keep platform behavior accurately labelled: a Windows build does not verify Mac mouse input or accessibility permissions, and CI does not verify Linux input with a real receiver.
 
 Before merging, require the platform checks in the repository's `main` protection/ruleset settings and block force pushes and deletion. Workflow files alone do not configure these settings. Repository settings and hosted checks must be verified separately; do not treat their configuration as complete without checking GitHub.
 

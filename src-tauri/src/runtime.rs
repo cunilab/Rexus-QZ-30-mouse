@@ -7,10 +7,15 @@ use crate::{
 use std::sync::atomic::Ordering;
 
 fn validate(mappings: &Mappings) -> Result<(), String> {
-    if !cfg!(windows) && mappings.thumb != crate::Action::Default {
-        return Err(
-            "Thumb-rest input has not been identified yet; keep button 4 at default.".into(),
-        );
+    mappings.validate()?;
+    let disable = crate::Action::Disable;
+    if mappings.thumb == disable
+        || (cfg!(windows) && [&mappings.wheel_left, &mappings.wheel_right].contains(&&disable))
+    {
+        return Err("Disable is not supported for button 4 or, on Windows, the side wheel; raw receiver inputs cannot be reliably suppressed.".into());
+    }
+    for action in mappings.actions() {
+        platform::validate_action(action)?;
     }
     Ok(())
 }
@@ -36,7 +41,9 @@ fn prepare(
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if inventory.devices.is_empty() {
-            return Err(inventory.error.clone().unwrap_or_else(|| "Connect the compatible USB receiver. Bluetooth identification is not verified yet.".into()));
+            return Err(inventory.error.clone().unwrap_or_else(|| {
+                "Connect the compatible USB receiver or pair the QZ30 over Bluetooth.".into()
+            }));
         }
         drop(inventory);
         if platform::permission() != "granted" {
@@ -171,9 +178,12 @@ pub fn reconcile(state: &AppState) {
             .engine
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let was_enabled = engine.enabled;
         engine.enabled = !state.shared.stopping.load(Ordering::Acquire)
             && state.shared.hook_running.load(Ordering::Acquire);
-        engine.error = None;
+        if engine.enabled && !was_enabled {
+            engine.error = None;
+        }
     }
 }
 
@@ -192,6 +202,52 @@ mod tests {
             settings_path: "unused.json".into(),
         }
     }
+    #[cfg(windows)]
+    #[test]
+    fn disable_rejects_raw_receiver_inputs_but_accepts_os_buttons() {
+        let mut mappings = Mappings {
+            middle: Action::Disable,
+            ..Mappings::default()
+        };
+        validate(&mappings).unwrap();
+        mappings.wheel_left = Action::Disable;
+        assert!(validate(&mappings).unwrap_err().contains("raw receiver"));
+    }
+
+    #[test]
+    fn disable_is_never_offered_for_button_4() {
+        let mappings = Mappings {
+            thumb: Action::Disable,
+            ..Mappings::default()
+        };
+        assert!(validate(&mappings).unwrap_err().contains("button 4"));
+    }
+
+    #[test]
+    fn thumb_mappings_are_valid_on_every_os() {
+        let mappings = Mappings {
+            thumb: Action::Copy,
+            ..Mappings::default()
+        };
+        validate(&mappings).unwrap();
+    }
+
+    #[test]
+    fn missing_but_well_formed_launch_target_does_not_block_mappings() {
+        let path = if cfg!(windows) {
+            r"C:\qz-flow-missing\app.exe"
+        } else if cfg!(target_os = "macos") {
+            "/Applications/QZ Flow Missing.app"
+        } else {
+            "/opt/qz-flow-missing/app"
+        };
+        let mappings = Mappings {
+            back: Action::LaunchApplication { path: path.into() },
+            ..Mappings::default()
+        };
+        validate(&mappings).unwrap();
+    }
+
     #[test]
     fn failed_preparation_or_save_retains_assignments_and_pause() {
         let state = state();
@@ -286,27 +342,6 @@ mod tests {
         assert!(!status.enabled);
         assert_eq!(status.mapping_state, "unavailable");
         assert!(status.error.unwrap().contains("saved"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn unsupported_saved_thumb_mapping_reports_reason_before_native_calls() {
-        let state = state();
-        let mappings = Mappings {
-            thumb: Action::Copy,
-            ..Mappings::default()
-        };
-        assert!(prepare(&state, &mut None, &mappings).is_err());
-        assert!(state
-            .shared
-            .engine
-            .lock()
-            .unwrap()
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Thumb-rest"));
-        assert!(!state.shared.engine.lock().unwrap().enabled);
     }
 
     #[test]

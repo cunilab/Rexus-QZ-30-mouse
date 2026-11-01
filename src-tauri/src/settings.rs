@@ -27,12 +27,13 @@ struct Envelope {
 
 fn current(bytes: &[u8]) -> Result<Settings, String> {
     let envelope: Envelope = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if envelope.version != 1 {
+    if envelope.version != 1 && envelope.version != 2 {
         return Err(format!(
             "Unsupported settings version: {}",
             envelope.version
         ));
     }
+    envelope.mappings.validate()?;
     Ok(Settings::new(envelope.mappings, envelope.paused))
 }
 
@@ -44,9 +45,9 @@ pub fn decode(bytes: &[u8]) -> Result<Settings, String> {
     {
         current(bytes)
     } else {
-        serde_json::from_slice(bytes)
-            .map(|mappings| Settings::new(mappings, false))
-            .map_err(|e| e.to_string())
+        let mappings: Mappings = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        mappings.validate()?;
+        Ok(Settings::new(mappings, false))
     }
 }
 
@@ -103,16 +104,21 @@ fn replace(path: &Path, bytes: &[u8], temporary: &Path) -> Result<(), String> {
 }
 
 pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
+    settings.mappings.validate()?;
     let parent = path.parent().ok_or("Invalid settings directory.")?;
     fs::create_dir_all(parent).map_err(|e| format!("Cannot create settings directory: {e}"))?;
     let bytes = serde_json::to_vec_pretty(&Envelope {
-        version: 1,
+        version: 2,
         mappings: settings.mappings.clone(),
         paused: settings.paused,
     })
     .map_err(|e| format!("Cannot encode settings: {e}"))?;
     match fs::read(path) {
-        Ok(original) if current(&original).is_err() => {
+        Ok(original)
+            if current(&original).is_err()
+                || serde_json::from_slice::<Envelope>(&original)
+                    .is_ok_and(|envelope| envelope.version != 2) =>
+        {
             preserve(&unique_sibling(path, "backup"), &original)?;
         }
         Ok(_) => (),
@@ -166,10 +172,40 @@ mod tests {
     }
 
     #[test]
+    fn version_one_migrates_with_exact_backup_and_custom_actions_round_trip() {
+        let fixture = Fixture::new();
+        let original = serde_json::to_vec(
+            &serde_json::json!({"version":1,"mappings":Mappings::default(),"paused":true}),
+        )
+        .unwrap();
+        fs::write(fixture.path(), &original).unwrap();
+        let mut settings = load(&fixture.path()).unwrap();
+        assert!(settings.paused);
+        settings.mappings.back = Action::CustomShortcut {
+            key: "KeyC".into(),
+            modifiers: vec!["control".into()],
+        };
+        save(&fixture.path(), &settings).unwrap();
+        assert_eq!(load(&fixture.path()).unwrap(), settings);
+        let backup = fs::read_dir(&fixture.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "backup"))
+            .unwrap();
+        assert_eq!(fs::read(backup).unwrap(), original);
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.path()).unwrap()).unwrap();
+        assert_eq!(value["version"], 2);
+        let mut invalid = value;
+        invalid["mappings"]["back"]["custom_shortcut"]["key"] = serde_json::json!("Unknown");
+        assert!(decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
+
+    #[test]
     fn rejects_unsupported_unknown_duplicate_and_malformed_settings() {
         let valid = serde_json::json!({"version":1,"mappings":Mappings::default(),"paused":false});
         for (field, value) in [
-            ("version", serde_json::json!(2)),
+            ("version", serde_json::json!(3)),
             ("extra", serde_json::json!(true)),
             ("paused", serde_json::json!("yes")),
         ] {

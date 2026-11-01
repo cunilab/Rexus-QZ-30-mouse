@@ -1,5 +1,32 @@
 # Validation — first desktop slice
 
+## Button 4 on every OS and over Bluetooth
+
+The OEM feature-report exchange and the vendor input frames now work on Windows, macOS and Linux, over the USB receiver or Bluetooth LE. On macOS over Bluetooth (`32c2:0012`) the exact receiver exchange succeeded through IOKit feature reports (challenge, command1, mask on and reset all acknowledged), and the idle feature report is the checksum-invalid `bb00000000000000`, which the shared protocol accepts as an idle state. Exact records: `analysis/THUMB-MODE-EVIDENCE.json` (`bluetooth_macos`) and `analysis/THUMB-INPUT-MODE.md`. Protocol and worker logic is one shared module with fake-IO tests on every OS; Linux hidraw discovery (uevent `HID_ID` plus the `0xffbb` descriptor collection) and the macOS vendor-frame parser have unit tests. A read-only macOS check opened the Bluetooth device and read its feature report; the enable/reset writes by QZ Flow itself were not run on hardware.
+
+Still needing a physical check: a thumb press and release over Bluetooth (the frames are assumed identical to the receiver's), a press on macOS and Linux with the receiver, the Linux udev rule on real hardware (hidraw access on USB and uhid), Windows Bluetooth collection discovery and raw input, and behavior with both a receiver and a Bluetooth mouse connected (setup refuses).
+
+## Button 4 receiver initialization — beta.6
+
+Local checks: 33 Node tests and 73 Windows Rust tests passed; formatting, version consistency, Clippy with warnings denied, and the optimized Windows build passed. Independent review passed after regression tests for bootstrap, mode loss, disconnect, cleanup failure and asynchronous Quit. The running beta.6 executable SHA256 is `861813c9a165cd3a45b1a5703fb5f0f067df0dd60f63903df699112d1a41218a`; a read-only feature query after app startup returned acknowledged mask `bb02000000040014`. Physical Volume up and lifecycle acceptance remain separate from these checks.
+
+On Andres Windows, a user-confirmed Show Desktop mismatch was traced to receiver keyboard events with no thumb vendor notification. After the original library's challenge/device-info initialization and acknowledged mask0x400, the user confirmed Show Desktop stopped and the read-only capture recorded paired `bb04000400000012` / `bb04000000000016` reports. Mask0 cleanup completed with a matching acknowledgement. See `analysis/THUMB-INPUT-MODE.md` for exact exchanges, earlier failed probes and limits. This input-mode test does not establish integrated beta.6 action execution or resolution of the earlier transient keyboard incident.
+
+## Beta.5 input safety repair
+
+The user reported Not responding and keyboard interference while using the wheel/buttons in beta.4. Keyboard behavior returned to normal after closing QZ Flow. This invalidates any inference of native safety from the earlier unit/build checks. [Incident and REA comparison](../analysis/INPUT-INCIDENT.md) distinguishes confirmed code hazards from the unresolved incident cause.
+
+Local repair validation: 32 Node tests and 53 Windows Rust tests passed, along with formatting, version consistency, and Clippy with warnings denied. Independent review passed after delayed-recovery and reentrant-release fixes. Repair tests use fake native senders and reentrant callbacks, without installing hooks or injecting real input. The repaired app is kept closed; saved mappings are paused with a backup for recovery. Physical Windows/Mac verification remains outstanding.
+
+
+## Milestone 3 ? 0.1.1-beta.4
+
+- Local Windows checks: 32 Node tests and 44 Rust tests passed, with version consistency, formatting and Clippy warnings denied. Optimized native build is checked separately from physical input execution.
+- Added coverage for structured action validation, version 1 migration/backups, raw-receiver Disable rejection, physical scan-code mapping/extended releases, recorder cancellation/drain, deep draft isolation, native editor cancellation, and mapped-input bypass during recording.
+- Independent cross-scope review verified launch paths remain data, application work runs outside input callbacks, and recording guard cleanup preserves consumed releases. Focus and held-key findings were fixed and reviewed.
+- Hosted Windows/Mac checks and physical OS configuration are separate gates. Native recording, dialogs, app launches, window actions and non-US layouts still require user verification; secure OS shortcuts cannot be guaranteed captured.
+
+
 ## Milestone 2 ? 0.1.1-beta.3
 
 - Local Windows validation: 24 Node tests, 32 Rust tests, formatting, Clippy with warnings denied, version consistency, and optimized Tauri build passed.
@@ -45,7 +72,7 @@ Native REA evidence: initial application `ev_fb459425d478357a66e11b2ee10b4e1f4fc
 
 - Actual QZ30 side-button and thumb-wheel events with Mouse Assistant closed, and a reversible remap in a disposable document. The original utility was left running and untouched.
 - macOS native build, permissions, HID registry values, button numbering, shortcuts and event-tap lifecycle on real hardware. Cross-compilation from this Windows host failed in a dependency needing an Apple native compiler. The CI definition is present but has not run remotely.
-- Bluetooth discovery and model-specific HID/vendor commands are not implemented. DPI/report-rate/macros/firmware controls remain outside this first slice.
+- Bluetooth discovery is implemented from measured IDs (BLE `32c2:0012`: macOS IOKit; Windows `HID#{00001812-...}_DEV_VID&0232C2_PID&0012` paths and Linux `bustype 0x05` uhid input nodes follow the documented formats) but the Windows and Linux paths are verified only by unit tests and CI builds, not on hardware; button 4 over Bluetooth uses the same vendor protocol, with the exchange measured on macOS and the input frames still to be confirmed by a press. Model-specific HID/vendor commands are not implemented. DPI/report-rate/macros/firmware controls remain outside this first slice.
 - The OS-level listener is global. Elevated Windows applications can reject synthetic shortcuts. Natural scrolling, non-US keyboard layouts and simultaneous multiple-mouse button presses need additional hardware validation.
 
 ## Review and limits

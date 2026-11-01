@@ -1,0 +1,14 @@
+# QZ Flow: give the logged-in user access to the QZ30 (USB receiver or Bluetooth LE) input nodes, the hidraw node of its
+# button 4 vendor interface, and /dev/uinput.
+# Install: sudo cp 70-qz-flow.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# Then replug the receiver or reconnect Bluetooth (and sign out and in if /dev/uinput is still not writable).
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="276d", ATTRS{id/product}=="1902", TAG+="uaccess"
+# Bluetooth LE: BlueZ creates the input device through uhid; its input node still carries id/vendor and id/product.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="32c2", ATTRS{id/product}=="0012", TAG+="uaccess"
+# Button 4 (thumb rest): the vendor collection is read and configured through hidraw. A Bluetooth LE mouse is a uhid
+# device, which has no idVendor/idProduct attributes (those exist only on USB parents), so match the HID parent by its
+# kernel name instead, "<bus>:<VENDOR>:<PRODUCT>.<n>" in uppercase hex. That form is identical for USB (bus 0003) and
+# Bluetooth (bus 0005).
+SUBSYSTEM=="hidraw", KERNELS=="0003:276D:1902.*", TAG+="uaccess"
+SUBSYSTEM=="hidraw", KERNELS=="0005:32C2:0012.*", TAG+="uaccess"
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"

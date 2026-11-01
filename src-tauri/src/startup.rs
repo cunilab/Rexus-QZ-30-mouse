@@ -240,3 +240,99 @@ mod native {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+mod native {
+    use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+    use tauri::Manager;
+
+    fn location(app: &AppHandle) -> Result<PathBuf, String> {
+        Ok(app
+            .path()
+            .config_dir()
+            .map_err(|error| error.to_string())?
+            .join("autostart/dev.qzflow.desktop"))
+    }
+
+    // An AppImage runs from a temporary mount; its own path is what must start at login.
+    fn executable() -> Result<PathBuf, String> {
+        match std::env::var_os("APPIMAGE") {
+            Some(path) => Ok(path.into()),
+            None => std::env::current_exe().map_err(|error| error.to_string()),
+        }
+    }
+
+    fn entry_for(executable: &Path) -> Result<String, String> {
+        let path = executable
+            .to_str()
+            .ok_or("Startup executable path is not valid Unicode.")?;
+        // Exec quoting for these characters is easy to get wrong, so refuse them.
+        if path
+            .chars()
+            .any(|c| c.is_control() || "\"`$\\%".contains(c))
+        {
+            return Err("Move QZ Flow to a path without quotes, $, ` , \\ or % before enabling launch at login.".into());
+        }
+        Ok(format!(
+            "[Desktop Entry]\nType=Application\nName=QZ Flow\nExec=\"{path}\" --autostart\nX-GNOME-Autostart-enabled=true\n"
+        ))
+    }
+
+    pub fn is_enabled(app: &AppHandle) -> Result<bool, String> {
+        match fs::read_to_string(location(app)?) {
+            Ok(actual) => Ok(actual == entry_for(&executable()?)?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
+        let path = location(app)?;
+        if !enabled {
+            return match fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    Err(error.to_string())
+                }
+                _ => Ok(()),
+            };
+        }
+        let entry = entry_for(&executable()?)?;
+        let parent = path.parent().ok_or("Invalid login settings directory.")?;
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let temporary = parent.join(format!(".qz-flow-login-{}.tmp", std::process::id()));
+        let result = fs::write(&temporary, entry)
+            .and_then(|_| fs::rename(&temporary, &path))
+            .map_err(|error| error.to_string());
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn exec_line_quotes_spaces_and_passes_the_login_flag_separately() {
+            let entry = entry_for(Path::new("/opt/QZ Flow/qz-flow")).unwrap();
+            assert!(entry.contains("Exec=\"/opt/QZ Flow/qz-flow\" --autostart\n"));
+        }
+        #[test]
+        fn paths_that_need_exec_escaping_are_refused() {
+            for path in [
+                "/opt/a\"b",
+                "/opt/$HOME",
+                "/opt/a`b",
+                "/opt/a\\b",
+                "/opt/100%",
+                "/opt/a\nb",
+            ] {
+                assert!(entry_for(Path::new(path)).is_err(), "{path}");
+            }
+        }
+    }
+}

@@ -1,6 +1,6 @@
 # QZ Flow
 
-An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Windows/macOS interface. It remaps OS mouse events and listens to observed side-wheel receiver reports on Windows; it does not use Rexus's DLL or change the mouse firmware.
+An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Windows/macOS/Linux interface. It remaps OS mouse events, listens to observed side-wheel receiver reports on Windows, and enables the mouse's separate button 4 input reports on every OS; on Linux it reads the receiver's evdev input device; it does not use Rexus's DLL or change the mouse firmware.
 
 ![QZ Flow interface with the original mouse render](docs/preview.png)
 
@@ -8,21 +8,42 @@ An independent desktop utility for a **Rexus Flow QZ30 Black**, with a shared Wi
 
 Open `dist/windows/QZ Flow.exe` after building or extracting the Windows artifact.
 
-1. Connect the mouse's USB receiver. Bluetooth identification is not verified.
+1. Connect the mouse's USB receiver, or pair the QZ30 over Bluetooth LE (works on Windows, macOS and Linux, including button 4).
 2. Quit the original Mouse Assistant from its system tray menu. QZ Flow refuses to activate mappings while that utility is running.
-3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 currently requires Windows and the USB receiver.
+3. Choose an action for Middle click (1), Back (2), Forward (3), Side up/down, or thumb-rest (4), then **Save and apply**. Button 4 works on Windows, macOS and Linux, over the receiver or Bluetooth: QZ Flow first prepares the mouse in the background and shows **Preparing button 4** until it is ready. Connect only one of the two (receiver or Bluetooth) while using button 4.
 4. Test a simple action, such as Back ? Copy, in a disposable text document. You can edit while mappings run; changes take effect only after Save.
 5. Use the tray menu to **Pause/Resume mappings** or **Quit**. Close hides the window; Minimize keeps the normal Windows behavior. Open **Settings** in the sidebar for **Launch at login** and window-behavior details. Login launches start hidden.
 
-Saved assignments restore automatically after prerequisite checks. Receiver loss suspends mappings, and reconnection can restore them (checked every two seconds). Explicit Pause persists across restarts and reconnections; Save and apply resumes mappings. Default-only assignments require no receiver.
+Saved assignments restore automatically after prerequisite checks. Receiver or Bluetooth loss suspends mappings, and reconnection can restore them (checked every two seconds). Explicit Pause persists across restarts and reconnections; Save and apply resumes mappings. Default-only assignments require no receiver.
 
 Active mappings apply to **all mice and trackpads on this computer**, not exclusively the QZ30. A receiver being present does not prove that the mouse is powered on, and its USB ID is shared by several OEM models.
 
-Actions: default behavior, copy, paste, undo, redo, select all, show desktop, Task View / Mission Control, volume up/down, browser back and forward. Primary left/right click and vertical scrolling are left alone. Windows accepts observed side-wheel and thumb-rest frames from this receiver; macOS currently requires horizontal OS scroll events and has no thumb-rest support. Remapped buttons behave as one-shot shortcuts, not held keys or drag controls. Holding a keyboard modifier bypasses the mapping to avoid releasing keys you are holding.
+Actions are grouped into Mouse, Editing, Desktop and windows, Browser and tabs, Media, Zoom and capture, and Custom. Click a mouse marker to select its editor. Custom shortcuts can be selected manually or recorded while QZ Flow has focus; application assignments use a native picker. Save and apply activates the draft. See [action behavior and verification](docs/ACTIONS.md).
+
+Primary left/right click and vertical scrolling are left alone. Over Bluetooth, Middle, Back, Forward and horizontal scroll are ordinary OS mouse events on every platform; Windows receiver side-wheel frames are USB-receiver-only. Windows accepts observed side-wheel frames from this receiver; macOS and Linux use horizontal OS scroll events. Button 4 uses the mouse's vendor input on every OS (verified on Windows with the receiver; on macOS the Bluetooth setup exchange was measured, but a physical press over Bluetooth and the Linux and Windows Bluetooth paths are still unverified). Disable is unavailable for button 4 and for Windows raw receiver wheel inputs because their native behavior cannot reliably be suppressed. Remapped shortcuts are one-shot actions, not held keys or drag controls. Physically held keyboard modifiers bypass synthetic shortcuts to avoid releasing keys you are holding.
+
+## Use on Linux
+
+Linux reads the QZ30's `/dev/input/event*` device (the USB receiver, or the Bluetooth LE mouse that BlueZ exposes through `uhid`) and re-emits all unmapped events through a `uinput` virtual mouse, so it works on X11 and Wayland. Both need permissions that ordinary users do not have by default:
+
+1. Install the udev rule, then replug the receiver or reconnect Bluetooth:
+
+   ```sh
+   sudo cp packaging/linux/70-qz-flow.rules /etc/udev/rules.d/
+   sudo udevadm control --reload && sudo udevadm trigger
+   echo uinput | sudo tee /etc/modules-load.d/uinput.conf && sudo modprobe uinput
+   ```
+
+   Sign out and in if `/dev/uinput` is still not writable. QZ Flow shows **Open input permissions** until the mouse's node is readable and `/dev/uinput` is writable; that button only explains these steps because Linux has no permission dialog.
+2. Mappings grab only the QZ30's pointer device (receiver or Bluetooth), not every mouse. Keyboard shortcuts and media keys are sent through a virtual keyboard. Unsupported actions (Show desktop, Minimize, Maximize) are rejected when saving; see [action behavior](docs/ACTIONS.md).
+3. Button 4 (thumb rest) is read and configured through the mouse's `hidraw` vendor node, which the same udev rule opens up (replug or reconnect after installing it); shortcut recording and window actions are unavailable. Choose keys manually for custom shortcuts. **Choose application** needs `zenity` or `kdialog`.
+4. The tray icon needs an AppIndicator-capable desktop (GNOME needs the AppIndicator extension). Without a tray, start QZ Flow again to reopen its window. Launch at login writes `~/.config/autostart/dev.qzflow.desktop`.
+
+Linux builds and unit tests run in GitHub Actions; real receiver behavior on Linux is unverified. Linux cannot see physically held keyboard modifiers, so a held Ctrl/Alt/Shift/Super combines with an injected shortcut instead of bypassing it, and on X11 the injected Ctrl/Alt/Shift/Super release can release a modifier you are physically holding. Only key and relative-motion events are mirrored by the virtual mouse; absolute-axis, LED and switch events on the grabbed receiver node are not. Programs started from an AppImage build do not inherit the AppImage's library environment.
 
 ## Build and run
 
-Install Node.js 24, Rust stable, and the native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the build computer. Windows requires the Microsoft C++ build tools and WebView2. macOS requires Xcode Command Line Tools.
+Install Node.js 24, Rust stable, and the native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the build computer. Windows requires the Microsoft C++ build tools and WebView2. macOS requires Xcode Command Line Tools. Linux requires `build-essential pkg-config libssl-dev libxdo-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev` (Debian/Ubuntu package names).
 
 ```sh
 npm ci
@@ -35,7 +56,7 @@ npm run check
 npm run build -- --no-bundle
 ```
 
-The last command produces a native release executable in `src-tauri/target/release`. For a Windows installer run `npm run build -- --bundles nsis`. For a macOS application run `npm run build -- --bundles app` **on a Mac**. Windows Authenticode and Apple signing/notarization are not configured. Updater artifact signing and draft releases are configured; in-app update prompts are a later milestone.
+The last command produces a native release executable in `src-tauri/target/release`. For a Windows installer run `npm run build -- --bundles nsis`. For a macOS application run `npm run build -- --bundles app` **on a Mac**. For Linux packages run `npm run build -- --bundles appimage,deb` on Linux. Windows Authenticode and Apple signing/notarization are not configured. Updater artifact signing and draft releases are configured; in-app update prompts are a later milestone.
 
 ### macOS
 
@@ -56,13 +77,14 @@ The first enumerates compatible receiver interfaces. The second also creates and
 
 ## Settings and implementation
 
-Assignments are stored in Tauri's per-user configuration directory under `dev.qzflow.desktop/mappings.json`. Windows normally uses `%APPDATA%`; macOS uses `~/Library/Application Support`. Saves use a staged file and atomic rename. The version 1 envelope stores assignments and an explicit Pause preference. Legacy assignments load unchanged. Before replacing a legacy, corrupt, or unsupported file, an exact sibling `.mappings.json-*.backup` is retained; failed backup or replacement leaves the original file intact.
+Assignments are stored in Tauri's per-user configuration directory under `dev.qzflow.desktop/mappings.json`. Windows normally uses `%APPDATA%`; macOS uses `~/Library/Application Support`; Linux uses `~/.config`. Saves use a staged file and atomic rename. The version 2 envelope stores assignments and an explicit Pause preference. Legacy and version 1 assignments load unchanged. Before replacing a legacy, corrupt, or unsupported file, an exact sibling `.mappings.json-*.backup` is retained; failed backup or replacement leaves the original file intact.
 
 For recovery or downgrade, Quit QZ Flow, copy the current file somewhere safe, then copy the chosen backup to `mappings.json`. Legacy backups work with the older app. A malformed file is reported and defaults remain inactive until replaced through a successful Save.
 
 - `ui/`: plain HTML, CSS, and JavaScript; no frontend framework or external assets.
 - `src-tauri/src/engine.rs`: shared mapping and press/release state.
-- `src-tauri/src/platform/`: Win32 and macOS inventory/hooks.
+- `src-tauri/src/platform/`: Win32, macOS and Linux (evdev/uinput) inventory/hooks.
+- `packaging/linux/`: udev rule granting the receiver, Bluetooth mouse and `/dev/uinput` access.
 - `tests/ui.test.cjs`: interface state/race tests using mocked native calls.
 - `analysis/ASSESSMENT.md`: REA findings from the supplied vendor packages.
 - `docs/VALIDATION.md`: actual checks and unresolved hardware work.

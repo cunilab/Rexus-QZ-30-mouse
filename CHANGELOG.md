@@ -4,6 +4,71 @@ Release notes use semantic versions. Entries under Unreleased are not a publishe
 
 ## [Unreleased]
 
+### Added
+
+- Button 4 (thumb rest) on macOS and Linux and over Bluetooth LE, in addition to Windows with the USB receiver. The OEM handshake and worker are one shared module (`platform/thumb.rs`); macOS uses IOKit HID feature and input reports, Linux uses hidraw (`70-qz-flow.rules` now grants access to the vendor node of both IDs), and Windows also accepts the Bluetooth `ffbb:1` collection. A Bluetooth idle feature report that is all zero no longer blocks the handshake. Status shows Preparing on every OS until the mouse acknowledges. The exchange was measured over Bluetooth on macOS; the Bluetooth press/release frames are assumed to match the receiver's, and macOS, Linux and Bluetooth behavior still needs a physical press. Disable is not offered for button 4. Connect only one of the receiver and the Bluetooth mouse while using button 4.
+- Bluetooth LE recognition on Windows, macOS and Linux (`32c2:0012`, "Rexus QZ30"), alongside the USB receiver. Back, Forward, Middle and horizontal scroll use ordinary OS events; Windows receiver side-wheel frames stay USB-only. The Linux udev rule now also covers `32c2:0012`. Windows and Linux Bluetooth behavior is unverified on hardware.
+- Linux support (x86_64): the receiver's evdev pointer device is grabbed and re-emitted through a `uinput` virtual mouse, so Back, Forward, Middle and the side wheel can be remapped or disabled on X11 and Wayland. Shortcuts and media keys use a virtual keyboard. A udev rule (`packaging/linux/70-qz-flow.rules`) grants access; see the README.
+- Linux AppImage and `.deb` release builds with signed updater artifacts, and a Linux job in the desktop checks.
+- Linux input hardening: the listener status is cleared even if the reader thread panics, a failed key release recreates the virtual keyboard so no modifier stays held, side-wheel tilt fires once per notch on high-resolution devices, and launched programs do not inherit AppImage environment variables.
+- Linux limits: no shortcut recording, and Show desktop, Minimize and Maximize are rejected because GNOME and KDE share no shortcut for them. Linux hardware behavior is unverified.
+
+### Fixed
+
+- A launch target that is missing, moved or updated no longer disables every mapping. Saving and startup check only that the path is absolute and has the right type; existence is checked when choosing the application and when the button is pressed.
+- On Windows, applications start through `ShellExecuteW`, so apps whose manifest requires elevation show the UAC prompt instead of failing with error 740.
+
+### Changed
+
+- Removed the unused virtual-key table for Windows custom shortcuts; they were already sent by physical scan code.
+
+## [0.1.1-beta.6]
+
+### Fixed
+
+- Initialize the QZ30 receiver before enabling button 4's separate input reports, so its saved action can replace the built-in Show Desktop shortcut.
+- Perform receiver setup outside engine/UI locks, validate completed acknowledgements, and show Preparing until button 4 is ready. Setup failures pause mappings with an error.
+- Restore the OEM default input mask on Pause, Default behavior and normal Quit; prepare the mode again after a detected receiver reconnect or mode reset.
+- Wait for Quit cleanup on a background task to keep the UI responsive.
+
+### Validation limits
+
+- A receiver-only physical test confirmed Show Desktop stops and thumb press/release reports arrive after initialization. Integrated beta.6 action execution and forced-exit/reconnect behavior require separate verification.
+
+## [0.1.1-beta.5]
+
+### Fixed
+
+- Release shared engine state before native dispatch so a slow input call cannot hold UI/status access hostage.
+- Prevent reentrant injection and stale suppression when a release arrives during dispatch.
+- Limit side-wheel desktop switching to one action per 250 ms.
+- Track accepted synthetic key events, check immediate partial-injection cleanup, and pause mappings on injection failures.
+- Delayed recovery never forces key-ups: uncertain pending keys require manual release before new injection.
+- Poll native foreground state during recording without waiting for Tauri's UI thread.
+
+### Validation limits
+
+- Beta.4 caused a reported hang and transient keyboard interference. These repairs address code hazards; the exact incident cause and repaired physical behavior remain unverified. The repaired app has not been started with live mappings.
+
+## [0.1.1-beta.4]
+
+### Added
+
+- Grouped action catalog: desktop switching, window controls, browser tabs, editing, media, zoom, and screenshot shortcuts.
+- Custom keyboard shortcuts with modifier/key selection and native focused-window recording.
+- Native application picker and application launch assignments.
+- Selectable QZ30 mouse markers and last-input highlighting.
+- Disable assignments for inputs whose native OS events can be suppressed.
+
+### Changed
+
+- Version 2 settings preserve legacy/version 1 assignments and make an exact backup before migration.
+- Application launch runs outside the input listener; asynchronous launch failures appear in status.
+
+### Validation limits
+
+- Physical Windows/Mac actions, native recording/dialog behavior, and OS shortcut configuration need user verification. Secure system shortcuts cannot be guaranteed recordable. Mac proprietary thumb input remains unavailable.
+
 - Dedicated Settings page for Launch at login and window behavior, separate from mouse assignments.
 
 ## [0.1.1-beta.3]

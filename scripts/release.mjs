@@ -4,7 +4,10 @@ import { execFileSync } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const platforms = ['windows-x86_64', 'darwin-aarch64', 'darwin-x86_64'];
+export const platforms = ['windows-x86_64', 'darwin-aarch64', 'darwin-x86_64', 'linux-x86_64'];
+// Each platform ships one signed updater bundle; Mac and Linux add a separate installer.
+const bundle = platform => platform.startsWith('windows') ? { updater: '-setup.exe' }
+  : platform.startsWith('linux') ? { updater: '.AppImage', installer: '.deb' } : { updater: '.app.tar.gz', installer: '.dmg' };
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sha256 = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -92,15 +95,15 @@ export function stage() {
   assert(readJson('package.json').version === version, 'Tag/version mismatch');
   const paths = JSON.parse(process.env.ARTIFACT_PATHS || '[]');
   assert(Array.isArray(paths) && paths.every(p => typeof p === 'string'), 'Invalid Tauri artifactPaths');
-  const files = paths.filter(path => existsSync(path) && statSync(path).isFile() && /\.(exe|dmg|gz|sig)$/.test(path));
-  const isWindows = platform.startsWith('windows');
-  const updater = files.filter(path => isWindows ? path.endsWith('-setup.exe') : path.endsWith('.app.tar.gz'));
+  const files = paths.filter(path => existsSync(path) && statSync(path).isFile() && /\.(exe|dmg|gz|AppImage|deb|sig)$/.test(path));
+  const { updater: updaterSuffix, installer } = bundle(platform);
+  const updater = files.filter(path => path.endsWith(updaterSuffix));
   assert(updater.length === 1, 'Expected exactly one updater bundle');
   const source = updater[0];
   const signature = readFileSync(`${source}.sig`, 'utf8').trim();
   verifySignature(readFileSync(source), signature, configuredPublicKey());
   if (!files.includes(`${source}.sig`)) files.push(`${source}.sig`);
-  assert(isWindows || files.some(path => path.endsWith('.dmg')), 'Missing Mac DMG installer');
+  assert(!installer || files.some(path => path.endsWith(installer)), `Missing ${platform} ${installer} installer`);
   mkdirSync('release-assets', { recursive: true });
   const records = [];
   for (const path of [...new Set(files)]) {
@@ -132,7 +135,8 @@ export function assemble(directory, tag, repository, publicKey) {
       ownFiles.push(entry.name);
     }
     assert(ownFiles.includes(record.updater) && ownFiles.includes(`${record.updater}.sig`), `Missing signed ${platform} updater`);
-    assert(platform.startsWith('windows') ? record.updater.endsWith('-setup.exe') : record.updater.endsWith('.app.tar.gz') && ownFiles.some(name => name.endsWith('.dmg')), 'Incorrect bundle type');
+    const { updater: updaterSuffix, installer } = bundle(platform);
+    assert(record.updater.endsWith(updaterSuffix) && (!installer || ownFiles.some(name => name.endsWith(installer))), 'Incorrect bundle type');
     assert(readFileSync(`${directory}/${record.updater}.sig`, 'utf8').trim() === record.signature, 'Signature metadata mismatch');
     verifySignature(readFileSync(`${directory}/${record.updater}`), record.signature, publicKey);
     updates[platform] = { signature: record.signature, url: `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(record.updater)}` };
@@ -153,7 +157,7 @@ export async function draft() {
   assert(run('git', ['rev-parse', 'HEAD']) === process.env.RELEASE_SHA, 'Release commit mismatch');
   await requireNoRelease(tag);
   const assets = assemble('release-assets', tag, process.env.GITHUB_REPOSITORY, configuredPublicKey());
-  const notes = `${releaseNotes(tagVersion(tag))}\n\nBuild commit: ${process.env.RELEASE_SHA}\n\nUpdater packages are signed. Windows Authenticode and Apple Developer signing/notarization are NOT configured; OS security warnings may occur. Mac hardware behavior remains unverified.\n`;
+  const notes = `${releaseNotes(tagVersion(tag))}\n\nBuild commit: ${process.env.RELEASE_SHA}\n\nUpdater packages are signed. Windows Authenticode and Apple Developer signing/notarization are NOT configured; OS security warnings may occur. Mac hardware behavior remains unverified. Linux packages are unsigned beyond the updater signature, and Linux input behavior (evdev/uinput) is unverified on hardware.\n`;
   writeFileSync('release-notes.txt', notes);
   const args = ['release', 'create', tag, '--verify-tag', '--draft', '--title', `QZ Flow ${tag}`, '--notes-file', 'release-notes.txt'];
   if (tag.includes('-')) args.push('--prerelease');
@@ -182,7 +186,7 @@ export async function verifyDraft() {
     files.push(name);
   }
   files.push('SHA256SUMS.txt');
-  assert(files.length === 10 && files.includes('latest.json'), 'Expected all installers, updater packages, signatures, manifest and checksums');
+  assert(files.length === 2 + platforms.reduce((count, platform) => count + (bundle(platform).installer ? 3 : 2), 0) && files.includes('latest.json'), 'Expected all installers, updater packages, signatures, manifest and checksums');
   assert(release.assets.length === files.length && files.every(name => release.assets.some(asset => asset.name === name && asset.size === statSync(`release-assets/${name}`).size)), 'Draft inventory mismatch');
   for (const platform of platforms) {
     const update = feed.platforms[platform];
@@ -190,10 +194,11 @@ export async function verifyDraft() {
     assert(update.url === `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(name)}` && name.startsWith(`${platform}-`) && files.includes(name) && files.includes(`${name}.sig`), 'Invalid updater download URL');
     assert(readFileSync(`release-assets/${name}.sig`, 'utf8').trim() === update.signature, 'Downloaded signature mismatch');
     const ownFiles = files.filter(file => file.startsWith(`${platform}-`));
-    assert(platform.startsWith('windows') ? ownFiles.length === 2 && name.endsWith('-setup.exe') : ownFiles.length === 3 && name.endsWith('.app.tar.gz') && ownFiles.filter(file => file.endsWith('.dmg')).length === 1, 'Missing or incorrect platform installer');
+    const { updater: updaterSuffix, installer } = bundle(platform);
+    assert(ownFiles.length === (installer ? 3 : 2) && name.endsWith(updaterSuffix) && (!installer || ownFiles.filter(file => file.endsWith(installer)).length === 1), 'Missing or incorrect platform installer');
     verifySignature(readFileSync(`release-assets/${name}`), update.signature, configuredPublicKey());
   }
-  console.log(`${tag}: downloaded draft inventory, checksums, all three signatures and update URLs verified. Draft remains unpublished.`);
+  console.log(`${tag}: downloaded draft inventory, checksums, all platform signatures and update URLs verified. Draft remains unpublished.`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
